@@ -286,11 +286,13 @@ def stop_pipeline():
 @app.get("/api/screen/latest")
 def get_screen_latest():
     ctrl = get_controller()
+    if not ctrl.client.is_ready():
+        return {"success": False, "message": "WDA is offline"}
     try:
         b64 = ctrl.capture_screenshot_base64()
         return {"success": True, "base64": b64}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"success": False, "message": str(e)}
 
 
 @app.get("/api/screen/raw")

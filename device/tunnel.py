@@ -69,7 +69,9 @@ class TunnelManager:
         if self.is_ios_17_plus:
             logger.info("iOS 17+ detected: Starting CoreDevice tunnel...")
             if tool_path:
-                cmd = [tool_path, "tunnel", "start"]
+                cmd = [tool_path, "tunnel", "start", "--userspace"]
+                if os.path.exists(r"C:\ProgramData\Apple\Lockdown"):
+                    cmd.extend(["--pair-record-path", r"C:\ProgramData\Apple\Lockdown"])
                 if self.udid:
                     cmd.extend(["--udid", self.udid])
             else:

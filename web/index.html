@@ -466,9 +466,10 @@
         }
 
         // 3. WDA
+        wdaOnline = !!(data.wda && data.wda.online);
         const dotWDA = document.getElementById("dot-wda");
         const txtWDA = document.getElementById("text-wda");
-        if (data.wda.online) {
+        if (wdaOnline) {
           dotWDA.className = "badge-dot dot-green";
           txtWDA.textContent = "WDA: 在线";
         } else {
@@ -502,8 +503,11 @@
       }
     }
 
+    let wdaOnline = false;
+
     // Capture & Mirror Screen
     async function fetchScreen() {
+      if (!wdaOnline) return;
       try {
         const res = await fetch("/api/screen/latest");
         if (!res.ok) return;
@@ -537,7 +541,7 @@
     function startSyncInterval() {
       clearInterval(syncInterval);
       syncInterval = setInterval(() => {
-        if (isSyncing) fetchScreen();
+        if (isSyncing && wdaOnline) fetchScreen();
       }, 1000);
     }
 

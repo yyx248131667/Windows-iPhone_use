@@ -67,9 +67,12 @@ class WDAClient:
         return self.get("/status")
 
     def is_ready(self) -> bool:
-        """Check if WDA is responsive."""
+        """Check if WDA is responsive without retrying or polluting logs."""
         try:
-            res = self.status()
-            return res.get("value", {}).get("state") == "success" or "sessionId" in str(res) or res.get("status") == 0
+            resp = self.session.get(self._url("/status"), timeout=1.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("value", {}).get("state") == "success" or "sessionId" in str(data) or data.get("status") == 0
+            return False
         except Exception:
             return False

@@ -17,6 +17,14 @@ class DevicePairing:
         Check pairing status and trigger pairing dialog if required.
         Returns: (is_paired, message)
         """
+        # Fast check: If valid pair record exists in Apple Lockdown, it is already paired
+        lockdown_dir = r"C:\ProgramData\Apple\Lockdown"
+        if os.path.exists(lockdown_dir) and self.udid:
+            clean_udid = self.udid.replace("-", "")
+            for f in os.listdir(lockdown_dir):
+                if f.endswith(".plist") and clean_udid.lower() in f.replace("-", "").lower():
+                    return True, "Device successfully paired (verified with Apple Lockdown record)."
+
         tool_path = None
         for candidate in ["ios.exe", "ios", os.path.join(os.path.dirname(__file__), "..", "ios.exe")]:
             if os.path.exists(candidate):
