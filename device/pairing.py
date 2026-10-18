@@ -1,4 +1,5 @@
 import logging
+import os
 import shutil
 import subprocess
 from typing import Optional, Tuple
@@ -16,7 +17,13 @@ class DevicePairing:
         Check pairing status and trigger pairing dialog if required.
         Returns: (is_paired, message)
         """
-        tool_path = shutil.which(self.go_ios_bin)
+        tool_path = None
+        for candidate in ["ios.exe", "ios", os.path.join(os.path.dirname(__file__), "..", "ios.exe")]:
+            if os.path.exists(candidate):
+                tool_path = os.path.abspath(candidate)
+                break
+        if not tool_path:
+            tool_path = shutil.which(self.go_ios_bin)
         
         # 1. Try go-ios pair
         if tool_path:

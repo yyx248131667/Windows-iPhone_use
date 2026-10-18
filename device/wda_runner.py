@@ -43,11 +43,32 @@ class WDARunner:
         except Exception:
             return ""
 
+    def _resolve_xctestrun(self) -> Optional[str]:
+        """Find .xctestrun file if path not explicitly set or not found."""
+        if self.xctestrun_path and os.path.exists(self.xctestrun_path):
+            return self.xctestrun_path
+        
+        # Search candidate locations
+        search_dirs = ["artifacts", "WDA-Full-XCTest-Bundle", "."]
+        for d in search_dirs:
+            if os.path.exists(d):
+                for root, _, files in os.walk(d):
+                    for f in files:
+                        if f.endswith(".xctestrun"):
+                            return os.path.join(root, f)
+        return None
+
     def build_command(self) -> Tuple[list, str]:
         """Construct the appropriate XCTest execution command based on installed tool."""
-        tool_path = shutil.which(self.go_ios_bin)
+        tool_path = None
+        for candidate in ["ios.exe", "ios", os.path.join(os.path.dirname(__file__), "..", "ios.exe")]:
+            if os.path.exists(candidate):
+                tool_path = os.path.abspath(candidate)
+                break
         if not tool_path:
-            return [], "go-ios executable not found in PATH."
+            tool_path = shutil.which(self.go_ios_bin)
+        if not tool_path:
+            return [], "go-ios executable not found in PATH or workspace."
 
         # Check whether `runwda` or `runtest` is available
         main_help = self._get_help_text(tool_path, "")
@@ -73,9 +94,11 @@ class WDARunner:
         if "--testrunnerbundleid" in sub_help:
             cmd.extend(["--testrunnerbundleid", self.testrunner_bundle_id])
 
-        if self.xctestrun_path and os.path.exists(self.xctestrun_path):
+        resolved_xctest = self._resolve_xctestrun()
+        if resolved_xctest:
             if "--xctestrunpath" in sub_help or not sub_help:
-                cmd.extend(["--xctestrunpath", os.path.abspath(self.xctestrun_path)])
+                cmd.extend(["--xctestrunpath", os.path.abspath(resolved_xctest)])
+                logger.info(f"Using xctestrun file: {resolved_xctest}")
 
         return cmd, "Command built successfully."
 

@@ -4,6 +4,13 @@ import os
 import sys
 import yaml
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from device.discovery import DeviceDiscovery
 from device.pairing import DevicePairing
 from device.tunnel import TunnelManager
@@ -93,12 +100,28 @@ def cmd_screenshot(args, cfg):
         print(f"❌ Failed to capture screenshot: {e}")
 
 
-def cmd_server(args, cfg):
+def cmd_server(args, cfg, auto_open: bool = True):
     import uvicorn
+    import webbrowser
+    import threading
     srv_cfg = cfg.get("server", {})
-    host = args.host or srv_cfg.get("host", "127.0.0.1")
-    port = args.port or srv_cfg.get("port", 8000)
-    print(f"🚀 Starting Windows-iPhone_use FastAPI server at http://{host}:{port}")
+    host = (args and getattr(args, "host", None)) or srv_cfg.get("host", "127.0.0.1")
+    port = (args and getattr(args, "port", None)) or srv_cfg.get("port", 8000)
+    
+    url = f"http://{host}:{port}"
+    print(f"\n✨ 正在启动 Windows-iPhone_use 可视化 WebUI: {url}")
+    print("📱 打开浏览器即可进行一键连接、屏幕镜像与实时交互控制\n")
+
+    if auto_open:
+        def _open():
+            import time
+            time.sleep(1.2)
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+        threading.Thread(target=_open, daemon=True).start()
+
     uvicorn.run("api.server:app", host=host, port=port, reload=srv_cfg.get("reload", False))
 
 
@@ -112,9 +135,20 @@ def cmd_init(args, cfg):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Windows-iPhone_use CLI")
+    parser = argparse.ArgumentParser(description="Windows-iPhone_use CLI & WebUI")
     parser.add_argument("--config", default="config/settings.yaml", help="Path to settings.yaml")
     subparsers = parser.add_subparsers(dest="command", help="Sub-commands")
+
+    # web / default
+    web_parser = subparsers.add_parser("web", help="Start WebUI dashboard (Default)")
+    web_parser.add_argument("--host", help="Server host")
+    web_parser.add_argument("--port", type=int, help="Server port")
+    web_parser.add_argument("--no-open", action="store_true", help="Do not auto-open browser")
+
+    # server
+    srv_parser = subparsers.add_parser("server", help="Start FastAPI HTTP server / WebUI")
+    srv_parser.add_argument("--host", help="Server host")
+    srv_parser.add_argument("--port", type=int, help="Server port")
 
     # discover
     subparsers.add_parser("discover", help="Discover connected iPhone devices")
@@ -132,11 +166,6 @@ def main():
     s_parser.add_argument("--udid", help="Device UDID")
     s_parser.add_argument("-o", "--output", default="screenshot.png", help="Output file path")
 
-    # server
-    srv_parser = subparsers.add_parser("server", help="Start FastAPI HTTP server")
-    srv_parser.add_argument("--host", help="Server host")
-    srv_parser.add_argument("--port", type=int, help="Server port")
-
     # init
     init_parser = subparsers.add_parser("init", help="Verify full connection, tunnel, and WDA pipeline")
     init_parser.add_argument("--udid", help="Device UDID")
@@ -144,7 +173,11 @@ def main():
     args = parser.parse_args()
     cfg = load_config(args.config)
 
-    if args.command == "discover":
+    # Default to WebUI if no command given or 'web' / 'server'
+    if not args.command or args.command in ("web", "server"):
+        auto_open = not getattr(args, "no_open", False)
+        cmd_server(args, cfg, auto_open=auto_open)
+    elif args.command == "discover":
         cmd_discover(args, cfg)
     elif args.command == "tunnel":
         cmd_tunnel(args, cfg)
@@ -152,8 +185,6 @@ def main():
         cmd_run_wda(args, cfg)
     elif args.command == "screenshot":
         cmd_screenshot(args, cfg)
-    elif args.command == "server":
-        cmd_server(args, cfg)
     elif args.command == "init":
         cmd_init(args, cfg)
     else:

@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -42,6 +43,9 @@ class DeviceDiscovery:
 
     def _resolve_tool_path(self) -> Optional[str]:
         """Find executable path for go-ios or fallback."""
+        for candidate in ["ios.exe", "ios", os.path.join(os.path.dirname(__file__), "..", "ios.exe")]:
+            if os.path.exists(candidate):
+                return os.path.abspath(candidate)
         return shutil.which(self.go_ios_bin)
 
     def list_devices(self) -> List[DeviceInfo]:

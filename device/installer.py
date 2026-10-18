@@ -51,7 +51,13 @@ class AppInstaller:
         if not valid:
             return False, f"Package validation failed: {msg}"
 
-        tool_path = shutil.which(self.go_ios_bin)
+        tool_path = None
+        for candidate in ["ios.exe", "ios", os.path.join(os.path.dirname(__file__), "..", "ios.exe")]:
+            if os.path.exists(candidate):
+                tool_path = os.path.abspath(candidate)
+                break
+        if not tool_path:
+            tool_path = shutil.which(self.go_ios_bin)
 
         # 1. Try go-ios install
         if tool_path:

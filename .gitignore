@@ -42,3 +42,7 @@ screenshot.png
 .vscode/
 *.swp
 *.swo
+
+# Local binaries and downloads
+ios.exe
+WDA-Full-XCTest-Bundle/

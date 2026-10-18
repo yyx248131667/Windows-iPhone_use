@@ -7,9 +7,9 @@ device:
   bundle_id: "com.facebook.WebDriverAgentRunner.xctrunner"
   testrunner_bundle_id: "com.facebook.WebDriverAgentRunner.xctrunner"
   # Path to the .xctestrun file (vital for XCTest execution)
-  xctestrun_path: "artifacts/WebDriverAgentRunner_iphoneos.xctestrun"
+  xctestrun_path: "artifacts/WebDriverAgentRunner_iphoneos17.5-arm64.xctestrun"
   # Path to the compiled or signed IPA / Runner.app (optional, for installer)
-  app_path: "artifacts/WebDriverAgentRunner-Runner.app"
+  app_path: "artifacts/WebDriverAgentRunner-Runner.ipa"
 
 tools:
   # Path to go-ios binary ('ios' if in PATH, or full path like 'C:\\tools\\go-ios\\ios.exe')

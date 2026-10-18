@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Windows-iPhone_use 控制中心 (WebUI)</title>
+  <style>
+    :root {
+      --bg-primary: #0f172a;
+      --bg-secondary: #1e293b;
+      --bg-card: rgba(30, 41, 59, 0.7);
+      --border-color: rgba(255, 255, 255, 0.1);
+      --accent-color: #38bdf8;
+      --accent-hover: #0284c7;
+      --success-color: #22c55e;
+      --warning-color: #f59e0b;
+      --danger-color: #ef4444;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    body { background-color: var(--bg-primary); color: var(--text-main); min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; }
+
+    /* Header */
+    header {
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-color);
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-size: 1.25rem; font-weight: 700; color: #fff; }
+    .brand span { color: var(--accent-color); }
+    .status-badges { display: flex; gap: 12px; align-items: center; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+    }
+    .badge-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot-green { background-color: var(--success-color); box-shadow: 0 0 8px var(--success-color); }
+    .dot-red { background-color: var(--danger-color); }
+    .dot-yellow { background-color: var(--warning-color); }
+
+    /* Layout */
+    .main-container {
+      display: flex;
+      flex: 1;
+      padding: 20px;
+      gap: 24px;
+      max-width: 1600px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    .left-panel { flex: 1; min-width: 380px; max-width: 540px; display: flex; flex-direction: column; gap: 18px; }
+    .right-panel { flex: 1.2; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
+
+    /* Card */
+    .card {
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+    }
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #e2e8f0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding-bottom: 10px;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary {
+      background: linear-gradient(135deg, #0284c7 0%, #38bdf8 100%);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(56, 189, 248, 0.3);
+    }
+    .btn-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(56, 189, 248, 0.4); }
+    .btn-danger { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .btn-danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.3); }
+    .btn-secondary { background: var(--bg-secondary); color: #e2e8f0; border: 1px solid var(--border-color); }
+    .btn-secondary:hover:not(:disabled) { background: #334155; }
+
+    /* Pipeline Checklist */
+    .pipeline-steps { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+    .step-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.4);
+      font-size: 0.84rem;
+    }
+    .step-name { display: flex; align-items: center; gap: 8px; color: #cbd5e1; }
+    .step-state { font-size: 0.78rem; font-weight: 600; }
+    .step-pending { color: var(--text-muted); }
+    .step-running { color: var(--accent-color); animation: pulse 1.5s infinite; }
+    .step-success { color: var(--success-color); }
+    .step-failed { color: var(--danger-color); }
+
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    /* Inputs */
+    .input-group { display: flex; gap: 8px; }
+    .input-text {
+      flex: 1;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 9px 12px;
+      color: #fff;
+      font-size: 0.85rem;
+      outline: none;
+    }
+    .input-text:focus { border-color: var(--accent-color); }
+    .select-dropdown {
+      background: #1e293b;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 9px 12px;
+      color: #fff;
+      font-size: 0.85rem;
+      outline: none;
+      cursor: pointer;
+    }
+
+    /* Terminal Console */
+    .terminal {
+      background: #090d16;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 12px;
+      font-family: Consolas, Monaco, "Courier New", monospace;
+      font-size: 0.78rem;
+      height: 180px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .log-line { display: flex; gap: 8px; line-height: 1.4; word-break: break-all; }
+    .log-time { color: #64748b; }
+    .log-INFO { color: #94a3b8; }
+    .log-WARNING { color: #f59e0b; }
+    .log-ERROR { color: #ef4444; }
+
+    /* iPhone Mockup Frame */
+    .phone-container {
+      position: relative;
+      background: #18181b;
+      border-radius: 48px;
+      padding: 12px;
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.8), inset 0 0 0 3px #27272a, inset 0 0 0 4px #09090b;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      user-select: none;
+    }
+    .phone-screen {
+      position: relative;
+      width: 375px;
+      height: 700px;
+      background: #000;
+      border-radius: 38px;
+      overflow: hidden;
+      cursor: crosshair;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .phone-screen img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      pointer-events: none;
+    }
+    .dynamic-island {
+      position: absolute;
+      top: 12px;
+      width: 100px;
+      height: 26px;
+      background: #000;
+      border-radius: 20px;
+      z-index: 30;
+      pointer-events: none;
+    }
+    .offline-placeholder {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: #64748b;
+      text-align: center;
+      padding: 24px;
+    }
+
+    /* Ripple Animation on Touch */
+    .touch-ripple {
+      position: absolute;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: rgba(56, 189, 248, 0.5);
+      border: 2px solid #38bdf8;
+      transform: translate(-50%, -50%) scale(0.5);
+      animation: ripple 0.4s ease-out forwards;
+      pointer-events: none;
+      z-index: 40;
+    }
+    @keyframes ripple {
+      to { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
+    }
+
+    /* Screen Action Bar */
+    .phone-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      padding: 8px 14px;
+    }
+    .btn-icon {
+      background: transparent;
+      border: none;
+      color: #e2e8f0;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.82rem;
+      padding: 6px 10px;
+      border-radius: 8px;
+      transition: background 0.2s;
+    }
+    .btn-icon:hover { background: rgba(255, 255, 255, 0.08); }
+    .btn-icon.active { background: rgba(56, 189, 248, 0.2); color: var(--accent-color); }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Header -->
+  <header>
+    <div class="brand">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M12 12 2.1 10.5"/></svg>
+      Windows-iPhone_use <span>WebUI</span>
+    </div>
+    <div class="status-badges">
+      <div class="badge" id="badge-device">
+        <div class="badge-dot dot-yellow" id="dot-device"></div>
+        <span id="text-device">检测设备中...</span>
+      </div>
+      <div class="badge" id="badge-tunnel">
+        <div class="badge-dot dot-red" id="dot-tunnel"></div>
+        <span id="text-tunnel">隧道: 离线</span>
+      </div>
+      <div class="badge" id="badge-wda">
+        <div class="badge-dot dot-red" id="dot-wda"></div>
+        <span id="text-wda">WDA: 离线</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <div class="main-container">
+
+    <!-- Left Column: Controls & Pipeline -->
+    <div class="left-panel">
+      
+      <!-- Card 1: One-Click Pipeline -->
+      <div class="card">
+        <div class="card-title">
+          <span>⚡ 核心控制与自动化</span>
+          <span style="font-size:0.75rem; color: var(--text-muted);" id="pipeline-status-text">就绪</span>
+        </div>
+        <div style="display:flex; gap:10px;">
+          <button class="btn btn-primary" id="btn-start-all" style="flex:2;" onclick="startPipeline()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            一键全流程连接与启动
+          </button>
+          <button class="btn btn-danger" id="btn-stop-all" style="flex:1;" onclick="stopPipeline()">
+            🛑 全部停止
+          </button>
+        </div>
+
+        <!-- Checklist -->
+        <div class="pipeline-steps">
+          <div class="step-item">
+            <span class="step-name">1. 发现已连接 iPhone</span>
+            <span class="step-state step-pending" id="step-discovery">待检测</span>
+          </div>
+          <div class="step-item">
+            <span class="step-name">2. 检查信任与配对</span>
+            <span class="step-state step-pending" id="step-pairing">待检测</span>
+          </div>
+          <div class="step-item">
+            <span class="step-name">3. iOS 17+ CoreDevice 隧道</span>
+            <span class="step-state step-pending" id="step-tunnel">待启动</span>
+          </div>
+          <div class="step-item">
+            <span class="step-name">4. XCTest 驱动启动 WDA</span>
+            <span class="step-state step-pending" id="step-wda">待启动</span>
+          </div>
+          <div class="step-item">
+            <span class="step-name">5. 会话初始化与屏幕同步</span>
+            <span class="step-state step-pending" id="step-session">待就绪</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 2: Quick Operations -->
+      <div class="card">
+        <div class="card-title">⌨️ 快捷操作与输入</div>
+        <!-- Text Input -->
+        <div class="input-group">
+          <input type="text" id="text-to-type" class="input-text" placeholder="输入要发送到 iPhone 的文字..." onkeydown="if(event.key==='Enter') sendText()">
+          <button class="btn btn-secondary" onclick="sendText()">发送</button>
+        </div>
+        <!-- App Launch -->
+        <div class="input-group">
+          <select id="app-select" class="select-dropdown" style="flex: 1.2;">
+            <option value="com.apple.Preferences">设置 (Preferences)</option>
+            <option value="com.apple.mobilesafari">Safari 浏览器</option>
+            <option value="com.apple.camera">相机 (Camera)</option>
+            <option value="com.apple.AppStore">App Store</option>
+            <option value="custom">输入自定义 Bundle ID...</option>
+          </select>
+          <input type="text" id="custom-bundle" class="input-text" placeholder="Bundle ID" style="display:none; flex: 1.5;">
+          <button class="btn btn-secondary" onclick="launchApp()">启动 App</button>
+        </div>
+      </div>
+
+      <!-- Card 3: Live Logs -->
+      <div class="card">
+        <div class="card-title">
+          <span>📜 运行日志</span>
+          <button class="btn-icon" style="padding:2px 8px; font-size:0.75rem;" onclick="clearLogs()">清屏</button>
+        </div>
+        <div class="terminal" id="log-terminal">
+          <div class="log-line"><span class="log-time">[System]</span><span>WebUI 界面已就绪。正在连接服务...</span></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Right Column: Interactive Screen Mirror -->
+    <div class="right-panel">
+      <div class="phone-container">
+        <div class="phone-screen" id="phone-screen" onmousedown="handleMouseDown(event)" onmouseup="handleMouseUp(event)">
+          <div class="dynamic-island"></div>
+          
+          <img id="screen-img" src="" style="display:none;" alt="iPhone Screen">
+          
+          <div class="offline-placeholder" id="screen-placeholder">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>
+            <div>
+              <p style="font-weight:600; color:#cbd5e1; margin-bottom:4px;">未检测到画面</p>
+              <p style="font-size:0.8rem;">请点击左侧「一键全流程连接与启动」</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Phone Action Bar -->
+        <div class="phone-actions">
+          <button class="btn-icon" onclick="triggerHome()" title="返回主屏幕">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            Home 键
+          </button>
+          <button class="btn-icon" onclick="triggerLock()" title="锁屏 / 解锁">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            锁屏
+          </button>
+          <button class="btn-icon" onclick="fetchScreen()" title="立即刷新一帧">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+            刷新截屏
+          </button>
+          <button class="btn-icon active" id="btn-sync" onclick="toggleSync()" title="实时同步屏幕">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <span id="text-sync">实时同步 (1s)</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    let isSyncing = true;
+    let syncInterval = null;
+    let mouseStart = null;
+    let deviceResolution = { width: 390, height: 844 };
+
+    // App select change
+    document.getElementById("app-select").addEventListener("change", (e) => {
+      const customInput = document.getElementById("custom-bundle");
+      customInput.style.display = e.target.value === "custom" ? "block" : "none";
+    });
+
+    // Fetch complete system status
+    async function updateStatus() {
+      try {
+        const res = await fetch("/api/status/all");
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // 1. Device
+        const dev = data.device;
+        const dotDev = document.getElementById("dot-device");
+        const txtDev = document.getElementById("text-device");
+        if (dev && dev.udid) {
+          dotDev.className = "badge-dot dot-green";
+          txtDev.textContent = `${dev.device_name} (iOS ${dev.product_version})`;
+        } else {
+          dotDev.className = "badge-dot dot-red";
+          txtDev.textContent = "未检测到 iPhone";
+        }
+
+        // 2. Tunnel
+        const dotTunnel = document.getElementById("dot-tunnel");
+        const txtTunnel = document.getElementById("text-tunnel");
+        if (data.tunnel.alive) {
+          dotTunnel.className = "badge-dot dot-green";
+          txtTunnel.textContent = "隧道: 运行中";
+        } else {
+          dotTunnel.className = "badge-dot dot-red";
+          txtTunnel.textContent = "隧道: 离线";
+        }
+
+        // 3. WDA
+        const dotWDA = document.getElementById("dot-wda");
+        const txtWDA = document.getElementById("text-wda");
+        if (data.wda.online) {
+          dotWDA.className = "badge-dot dot-green";
+          txtWDA.textContent = "WDA: 在线";
+        } else {
+          dotWDA.className = "badge-dot dot-red";
+          txtWDA.textContent = "WDA: 离线";
+        }
+
+        // 4. Session & Screen Size
+        if (data.session && data.session.screen_size) {
+          deviceResolution = data.session.screen_size;
+        }
+
+        // 5. Pipeline Steps
+        const p = data.pipeline;
+        if (p) {
+          document.getElementById("pipeline-status-text").textContent = p.current_step || "就绪";
+          for (let step in p.steps) {
+            const el = document.getElementById(`step-${step}`);
+            if (el) {
+              const state = p.steps[step];
+              el.className = `step-state step-${state}`;
+              el.textContent = state === "success" ? "✓ 成功" : state === "running" ? "● 执行中..." : state === "failed" ? "✗ 失败" : "待执行";
+            }
+          }
+          if (p.status === "error") {
+            document.getElementById("pipeline-status-text").innerHTML = `<span style="color:#ef4444;">${p.error_message || "执行失败"}</span>`;
+          }
+        }
+      } catch (e) {
+        console.error("Status polling failed:", e);
+      }
+    }
+
+    // Capture & Mirror Screen
+    async function fetchScreen() {
+      try {
+        const res = await fetch("/api/screen/latest");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.success && data.base64) {
+          const img = document.getElementById("screen-img");
+          const placeholder = document.getElementById("screen-placeholder");
+          img.src = `data:image/png;base64,${data.base64}`;
+          img.style.display = "block";
+          placeholder.style.display = "none";
+        }
+      } catch (e) {}
+    }
+
+    // Toggle Screen Sync
+    function toggleSync() {
+      isSyncing = !isSyncing;
+      const btn = document.getElementById("btn-sync");
+      const txt = document.getElementById("text-sync");
+      if (isSyncing) {
+        btn.classList.add("active");
+        txt.textContent = "实时同步 (1s)";
+        startSyncInterval();
+      } else {
+        btn.classList.remove("active");
+        txt.textContent = "实时同步: 关";
+        clearInterval(syncInterval);
+      }
+    }
+
+    function startSyncInterval() {
+      clearInterval(syncInterval);
+      syncInterval = setInterval(() => {
+        if (isSyncing) fetchScreen();
+      }, 1000);
+    }
+
+    // Pipeline Start / Stop
+    async function startPipeline() {
+      const btn = document.getElementById("btn-start-all");
+      btn.disabled = true;
+      try {
+        await fetch("/api/pipeline/start", { method: "POST" });
+      } catch (e) {
+        alert("启动失败: " + e);
+      } finally {
+        setTimeout(() => { btn.disabled = false; }, 2000);
+      }
+    }
+
+    async function stopPipeline() {
+      try {
+        await fetch("/api/pipeline/stop", { method: "POST" });
+      } catch (e) {
+        alert("停止失败: " + e);
+      }
+    }
+
+    // Interactive Screen Click & Swipe Handling
+    function handleMouseDown(e) {
+      const screen = document.getElementById("phone-screen");
+      const rect = screen.getBoundingClientRect();
+      mouseStart = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        time: Date.now()
+      };
+    }
+
+    async function handleMouseUp(e) {
+      if (!mouseStart) return;
+      const screen = document.getElementById("phone-screen");
+      const rect = screen.getBoundingClientRect();
+      const endX = e.clientX - rect.left;
+      const endY = e.clientY - rect.top;
+      const duration = (Date.now() - mouseStart.time) / 1000;
+
+      const dx = endX - mouseStart.x;
+      const dy = endY - mouseStart.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      // Create Visual Touch Ripple
+      const ripple = document.createElement("div");
+      ripple.className = "touch-ripple";
+      ripple.style.left = `${mouseStart.x}px`;
+      ripple.style.top = `${mouseStart.y}px`;
+      screen.appendChild(ripple);
+      setTimeout(() => ripple.remove(), 400);
+
+      const normStartX = Math.max(0, Math.min(1, mouseStart.x / rect.width));
+      const normStartY = Math.max(0, Math.min(1, mouseStart.y / rect.height));
+
+      if (dist < 10) {
+        // Tap
+        await fetch("/api/action/tap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ normalized_x: normStartX, normalized_y: normStartY })
+        });
+      } else {
+        // Swipe / Drag
+        const normEndX = Math.max(0, Math.min(1, endX / rect.width));
+        const normEndY = Math.max(0, Math.min(1, endY / rect.height));
+        await fetch("/api/action/swipe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            norm_from_x: normStartX,
+            norm_from_y: normStartY,
+            norm_to_x: normEndX,
+            norm_to_y: normEndY,
+            duration: Math.max(0.3, Math.min(1.0, duration))
+          })
+        });
+      }
+      mouseStart = null;
+      // Fetch fresh screenshot shortly after gesture
+      setTimeout(fetchScreen, 300);
+    }
+
+    // Action Helpers
+    async function sendText() {
+      const input = document.getElementById("text-to-type");
+      const text = input.value.trim();
+      if (!text) return;
+      await fetch("/api/action/type", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text })
+      });
+      input.value = "";
+      setTimeout(fetchScreen, 500);
+    }
+
+    async function launchApp() {
+      const select = document.getElementById("app-select");
+      let bundleId = select.value;
+      if (bundleId === "custom") {
+        bundleId = document.getElementById("custom-bundle").value.trim();
+      }
+      if (!bundleId) {
+        alert("请输入有效的应用 Bundle ID");
+        return;
+      }
+      await fetch("/api/action/app/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bundle_id: bundleId })
+      });
+      setTimeout(fetchScreen, 1200);
+    }
+
+    async function triggerHome() {
+      await fetch("/api/action/home", { method: "POST" });
+      setTimeout(fetchScreen, 600);
+    }
+
+    async function triggerLock() {
+      await fetch("/api/action/lock", { method: "POST" });
+      setTimeout(fetchScreen, 600);
+    }
+
+    // Live Logs
+    async function updateLogs() {
+      try {
+        const res = await fetch("/api/logs");
+        if (!res.ok) return;
+        const data = await res.json();
+        const term = document.getElementById("log-terminal");
+        if (data.logs && data.logs.length > 0) {
+          term.innerHTML = data.logs.map(l => `
+            <div class="log-line">
+              <span class="log-time">[${l.time}]</span>
+              <span class="log-${l.level}">${escapeHtml(l.message)}</span>
+            </div>
+          `).join("");
+          term.scrollTop = term.scrollHeight;
+        }
+      } catch (e) {}
+    }
+
+    function clearLogs() {
+      document.getElementById("log-terminal").innerHTML = "";
+    }
+
+    function escapeHtml(text) {
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+      return String(text).replace(/[&<>"']/g, m => map[m]);
+    }
+
+    // Polling Loops
+    setInterval(updateStatus, 1500);
+    setInterval(updateLogs, 2000);
+    startSyncInterval();
+    updateStatus();
+    updateLogs();
+  </script>
+</body>
+</html>
