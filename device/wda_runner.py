@@ -88,17 +88,15 @@ class WDARunner:
         if self.udid:
             cmd.extend(["--udid", self.udid])
 
-        if "--bundleid" in sub_help or not sub_help:
+        # go-ios requires: either NONE of bundleid, testrunnerbundleid and xctestconfig or ALL of them.
+        is_default_bundle = (
+            self.bundle_id == "com.facebook.WebDriverAgentRunner.xctrunner"
+            and self.testrunner_bundle_id == "com.facebook.WebDriverAgentRunner.xctrunner"
+        )
+        if not is_default_bundle:
             cmd.extend(["--bundleid", self.bundle_id])
-        
-        if "--testrunnerbundleid" in sub_help:
             cmd.extend(["--testrunnerbundleid", self.testrunner_bundle_id])
-
-        resolved_xctest = self._resolve_xctestrun()
-        if resolved_xctest:
-            if "--xctestrunpath" in sub_help or not sub_help:
-                cmd.extend(["--xctestrunpath", os.path.abspath(resolved_xctest)])
-                logger.info(f"Using xctestrun file: {resolved_xctest}")
+            cmd.extend(["--xctestconfig", "WebDriverAgentRunner.xctest"])
 
         return cmd, "Command built successfully."
 
