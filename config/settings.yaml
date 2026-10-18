@@ -1,0 +1,44 @@
+# Windows-iPhone_use Configuration
+
+device:
+  # Device UDID (leave empty to automatically use the first discovered device)
+  udid: ""
+  # Bundle ID of the WebDriverAgentRunner test application
+  bundle_id: "com.facebook.WebDriverAgentRunner.xctrunner"
+  testrunner_bundle_id: "com.facebook.WebDriverAgentRunner.xctrunner"
+  # Path to the .xctestrun file (vital for XCTest execution)
+  xctestrun_path: "artifacts/WebDriverAgentRunner_iphoneos.xctestrun"
+  # Path to the compiled or signed IPA / Runner.app (optional, for installer)
+  app_path: "artifacts/WebDriverAgentRunner-Runner.app"
+
+tools:
+  # Path to go-ios binary ('ios' if in PATH, or full path like 'C:\\tools\\go-ios\\ios.exe')
+  go_ios_bin: "ios"
+  # Fallback to pymobiledevice3 if preferred
+  use_pymobiledevice3: false
+
+tunnel:
+  # Enable tunnel for iOS 17+ (CoreDevice / RemoteXPC support)
+  enable_tunnel: true
+  # Local forwarded port to reach WDA on device
+  wda_local_port: 8100
+  # Device target port where WDA listens
+  wda_device_port: 8100
+  # Auto restart tunnel if disconnected
+  auto_restart: true
+  health_check_interval: 5
+
+wda:
+  # WDA base URL (points to tunnel forwarded local port)
+  base_url: "http://127.0.0.1:8100"
+  timeout_seconds: 30
+  max_retries: 3
+  # Default session capabilities
+  capabilities:
+    shouldUseCompactResponses: false
+    elementResponseAttributes: "type,label,name,value,rect"
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+  reload: false

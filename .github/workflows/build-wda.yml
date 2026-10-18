@@ -1,0 +1,144 @@
+name: Build WebDriverAgent for Testing
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-wda.yml'
+  workflow_dispatch:
+    inputs:
+      wda_repository:
+        description: 'WebDriverAgent repository URL'
+        required: true
+        default: 'https://github.com/appium/WebDriverAgent.git'
+      wda_ref:
+        description: 'Branch, tag, or SHA of WebDriverAgent to checkout'
+        required: true
+        default: 'master'
+      retention_days:
+        description: 'Artifact retention period in days'
+        required: true
+        default: '14'
+
+jobs:
+  build:
+    name: Build WDA Test Bundle & .xctestrun
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout WebDriverAgent
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.wda_repository || 'appium/WebDriverAgent' }}
+          ref: ${{ github.event.inputs.wda_ref || 'master' }}
+          path: WebDriverAgent
+
+      - name: Select Xcode
+        run: |
+          echo "Available Xcode installations:"
+          ls -d /Applications/Xcode*
+          # Select Xcode 15+ for modern iOS support
+          sudo xcode-select -s /Applications/Xcode_15.4.app || sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+
+      - name: Build for Testing (Preserve XCTest Artifacts)
+        working-directory: WebDriverAgent
+        run: |
+          set -e
+          echo "Starting xcodebuild build-for-testing..."
+          
+          # IMPORTANT: We use build-for-testing to generate both the Runner app and .xctestrun!
+          # WDA relies on the XCTest execution mechanism and cannot be executed merely as an isolated IPA.
+          xcodebuild build-for-testing \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath ./build_output \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Inspect Build Artifacts
+        working-directory: WebDriverAgent
+        run: |
+          echo "=== Build Products Directory ==="
+          ls -la ./build_output/Build/Products/
+          
+          echo "=== Debug-iphoneos Contents ==="
+          ls -la ./build_output/Build/Products/Debug-iphoneos/
+          
+          # Verify .xctestrun exists
+          XCTESTRUN_FILE=$(find ./build_output/Build/Products -name "*.xctestrun" | head -n 1)
+          if [ -z "$XCTESTRUN_FILE" ]; then
+            echo "::error::No .xctestrun file generated! WDA runner cannot be launched without it."
+            exit 1
+          fi
+          echo "Found .xctestrun file: $XCTESTRUN_FILE"
+
+      - name: Package Complete Test Bundle & IPA
+        working-directory: WebDriverAgent
+        run: |
+          set -e
+          mkdir -p ../dist/bundle
+          mkdir -p ../dist/ipa/Payload
+
+          PRODUCTS_DIR="./build_output/Build/Products"
+          DEBUG_IPHONEOS="$PRODUCTS_DIR/Debug-iphoneos"
+          
+          # 1. Copy the full test products and .xctestrun files into bundle
+          cp -R "$DEBUG_IPHONEOS" ../dist/bundle/
+          find "$PRODUCTS_DIR" -maxdepth 1 -name "*.xctestrun" -exec cp {} ../dist/bundle/ \;
+
+          # 2. Package IPA for signing tools (Sideloadly / zsign)
+          cp -R "$DEBUG_IPHONEOS/WebDriverAgentRunner-Runner.app" ../dist/ipa/Payload/
+          cd ../dist/ipa
+          zip -r ../WebDriverAgentRunner-Runner.ipa Payload
+          cd ../../WebDriverAgent
+
+          # 3. Zip the full XCTest testing suite bundle
+          cd ../dist
+          zip -r WDA-Full-XCTest-Bundle.zip bundle/
+          
+          echo "Packaging completed:"
+          ls -lh WDA-Full-XCTest-Bundle.zip WebDriverAgentRunner-Runner.ipa
+
+      - name: Upload Full Test Suite Artifact (.xctestrun + Runner.app)
+        uses: actions/upload-artifact@v4
+        with:
+          name: WDA-Full-XCTest-Bundle
+          path: |
+            dist/WDA-Full-XCTest-Bundle.zip
+            dist/bundle/
+          retention-days: ${{ fromJSON(github.event.inputs.retention_days || '14') }}
+
+      - name: Upload Convenience IPA (For Signing)
+        uses: actions/upload-artifact@v4
+        with:
+          name: WebDriverAgentRunner-Runner-IPA
+          path: dist/WebDriverAgentRunner-Runner.ipa
+          retention-days: ${{ fromJSON(github.event.inputs.retention_days || '14') }}
+
+      - name: Generate Workflow Summary
+        run: |
+          cat << 'EOF' >> $GITHUB_STEP_SUMMARY
+          ## 📱 WebDriverAgent Build Artifacts Summary
+
+          > **Important Architecture Notice**:
+          > WebDriverAgent is **NOT** a standard standalone iOS application. It is an **XCTest Runner application**.
+          > Installing only the signed `WebDriverAgentRunner-Runner.ipa` is necessary, but **not sufficient** to launch the test server.
+          > You must retain the corresponding `.xctestrun` configuration file and runner test bundle so that tools like `go-ios` or `pymobiledevice3` can properly drive the XCTest automation channel.
+
+          ### Generated Artifacts
+          1. **`WDA-Full-XCTest-Bundle`**:
+             - `WebDriverAgentRunner_iphoneos*.xctestrun` (XCTest configuration)
+             - `Debug-iphoneos/WebDriverAgentRunner-Runner.app` (Runner bundle)
+             - Dependent frameworks and test bundles
+          2. **`WebDriverAgentRunner-Runner-IPA`**:
+             - Unsigned IPA convenient for Windows re-signing tools (e.g. Sideloadly, zsign, AltStore).
+
+          ### Next Steps on Windows:
+          1. Sign the `WebDriverAgentRunner-Runner.app` or `.ipa` using your Apple Developer certificate or free Apple ID.
+          2. Ensure the signed app preserves the test runner bundle ID and entitlements (`get-task-allow`).
+          3. Install to device via `device/installer.py` or `ios install`.
+          4. For iOS 17+, start the tunnel via `device/tunnel.py` (`ios tunnel start`).
+          5. Launch WDA via `device/wda_runner.py` referencing the `.xctestrun` file.
+          EOF
