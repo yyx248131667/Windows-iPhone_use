@@ -46,3 +46,13 @@ screenshot.png
 # Local binaries and downloads
 ios.exe
 WDA-Full-XCTest-Bundle/
+
+devimages/
+
+# Local signing credentials and device pairing identity
+*.p12
+*.pfx
+*.mobileprovision
+*.key
+selfIdentity.plist
+config/settings.local.yaml

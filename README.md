@@ -1,198 +1,121 @@
 # Windows-iPhone_use
 
-基于 Windows 控制与自动化 iOS 设备（iPhone / iPad）的完整工具链与服务框架。适配 **iOS 17+ CoreDevice 隧道**架构、**WebDriverAgent XCTest 驱动机制**、并提供 **FastAPI 接口与 Python 控制层**。
+在 Windows 上通过 WebDriverAgent（WDA）控制 iPhone，提供 WebUI、FastAPI 接口和 Python 控制层。iOS 17+ 使用 CoreDevice 用户态隧道，并单独转发 WDA 的 HTTP 端口。
 
----
+## 开源版本包含什么
 
-## 📌 核心认知与架构要点
+仓库提供控制程序、通用配置、测试和 WDA 编译工作流。**不提供任何个人签名版本、签名证书、私钥、描述文件或预设设备 UDID。** 每位使用者自行准备适用于其设备的 WDA 签名与安装包。默认包名仅作示例，不代表已完成签名。
 
-### 1. WDA 不是普通 iOS 应用，而是 XCTest Runner
-* **运行机制差异**：普通 iOS 应用通过 SpringBoard 独立运行，而 **WebDriverAgent (WDA)** 依赖 iOS 底层的 **XCTest 测试框架与调试通道**拉起。
-* **构建产物保留**：编译阶段**绝不能仅仅打包一个 Runner.ipa**，必须完整保留测试配置 `.xctestrun` 文件、`WebDriverAgentRunner-Runner.app` 及其依赖测试 Bundle。
-* **全链路闭环验证**：成功安装签名后的 Runner IPA 并不代表可以启动测试服务。构建、签名、安装、XCTest 调起与 HTTP 通信必须作为一个完整链路进行端到端验证。
+`artifacts/` 用于本机存放构建包和签名包，目录中的文件默认不纳入 Git。不要把证书、证书密码、设备配对身份或已签名 IPA 加入公开仓库。
 
-### 2. Windows 签名与验证
-* **工具选择**：可在 Windows 上使用 Sideloadly、zsign 或配合个人免费/付费 Apple ID 证书进行签名。
-* **签名要点**：签名时必须保留 `get-task-allow` 调试权限与测试 runner 的 entitlements 结构，并确保签名后的 Bundle ID 与 `.xctestrun` 配置中的标识符保持一致。
-* **可用性校验**：签名安装后，先通过 `device/wda_runner.py` 或 `go-ios` 验证 XCTest 通道是否可被正常引导并启动 HTTP 8100 端口服务。
+## 环境准备
 
-### 3. iOS 17+ CoreDevice 隧道与 RemoteXPC
-* **iOS 16 及以下**：设备通信主要走传统的 `usbmuxd`，可通过端口转发（如 `ios forward 8100 8100` 或 `iproxy`）直接连通 WDA。
-* **iOS 17+**：苹果重构为 **CoreDevice** 架构，使用 IPv6 隧道承载 RemoteXPC 通信。在 Windows 下必须通过 `ios tunnel start`（或 `pymobiledevice3 remote tunneld`）建立通信隧道，才能访问设备上的 WDA 服务。
+- Windows 10 / 11，Python 3.10+。
+- 安装 Apple Devices 或 iTunes 所提供的 Apple USB 设备支持。
+- 从 [go-ios 官方仓库](https://github.com/danielpaulus/go-ios) 获取适用于 Windows 的程序，放到项目根目录并命名为 `ios.exe`。
+- 手机通过 USB 连接，解锁并信任电脑；按设备提示开启开发者模式，准备所需开发者磁盘映像。
 
-### 4. GitHub Actions 编译考量
-* 预置 macOS Runner（macOS 14 + Xcode 15/16）进行 `xcodebuild build-for-testing`。
-* 自动打包上传 `.xctestrun` + `WebDriverAgentRunner-Runner.app` 完整测试包，并可选输出未签名的测试 IPA。
-* 默认 Artifact 保留期设置为 14 天，充分平衡 GitHub Actions 配额与构建产物留存。
-
----
-
-## 📁 项目目录结构
-
-```text
-Windows-iPhone_use/
-├── .github/
-│   └── workflows/
-│       └── build-wda.yml      # GitHub Actions: 自动编译并打包保留 .xctestrun 与测试 Bundle
-│
-├── device/
-│   ├── discovery.py          # 发现已连接的 iPhone，识别 iOS 版本与连接方式
-│   ├── pairing.py            # 配对检查与信任握手引导
-│   ├── tunnel.py             # iOS 17+ CoreDevice 隧道与端口转发管理
-│   ├── installer.py          # 验证并安装 IPA / 测试 Bundle
-│   └── wda_runner.py         # XCTest 驱动与 WDA 启动生命周期管理
-│
-├── wda/
-│   ├── client.py             # WDA RESTful HTTP 客户端（含重试与状态检测）
-│   ├── session.py            # 会话生命周期管理与屏幕参数获取
-│   ├── screenshot.py         # 极速屏幕截图（支持 PIL Image、PNG 字节与 Base64）
-│   ├── elements.py           # 控件树解析与元素定位（XPath / Predicate / Class）
-│   └── gestures.py           # 触摸、双击、长按、滑动、拖拽、文本输入与硬件按键
-│
-├── agent/
-│   ├── controller.py         # 顶层自动化控制器，串联设备生命周期与操作执行
-│   └── actions.py            # 强类型动作定义（Pydantic 规范化）
-│
-├── api/
-│   └── server.py             # FastAPI HTTP 服务接口
-│
-├── config/
-│   └── settings.yaml         # 全局设备、工具、隧道与服务配置
-│
-├── requirements.txt          # Python 依赖清单
-├── .gitignore                # Git 忽略配置
-├── main.py                   # CLI 命令行入口
-└── README.md                 # 项目说明文档
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
----
+不同 go-ios 版本的参数可能有差异，签名、安装和隧道命令以本机 `ios.exe --help` 为准。
 
-## 🚀 快速上手
+## 准备自己的 WDA
 
-### 1. 环境准备
-* 操作系统：Windows 10 / 11 (x64)
-* Python 版本：Python 3.10+
-* 驱动与依赖工具：
-  - 安装 [iTunes for Windows](https://www.apple.com/itunes/) 或 Apple Devices 应用（提供基础 usbmuxd 驱动）。
-  - 安装 [go-ios](https://github.com/danielpaulus/go-ios)（将其加入系统环境变量 `PATH`，或者在 `config/settings.yaml` 中配置路径）。
+### 构建或获取未签名包
 
-安装 Python 依赖：
-```bash
-pip install -r requirements.txt
+本仓库的 Actions 提供 `Build WebDriverAgent for Testing` 工作流。运行后下载 `WDA-Full-XCTest-Bundle` 和 `WebDriverAgentRunner-Runner-IPA`；工作流关闭了代码签名，产物需要由使用者自行签名。也可以参考 [Appium 官方预构建 WDA 说明](https://github.com/appium/appium-xcuitest-driver/blob/master/docs/getting-started/provisioning-profile/generic-device-config.md)。
+
+保留原始 Runner.app、内嵌 `.xctest` 和构建生成的 `.xctestrun` 供排查使用。本项目当前通过 `go-ios runwda` 按已安装的应用包名启动 XCTest，不要求本地存在 `.xctestrun`；配置中的 `xctestrun_path` 不会作为启动参数传给 go-ios。
+
+### iOS 17+ 的框架兼容处理
+
+[Appium 官方说明](https://appium.github.io/appium-xcuitest-driver/latest/guides/run-preinstalled-wda/)指出：预安装 WDA 应使用设备本地的 XCTest 框架；包内旧版 `Frameworks/XC*.framework` 可能造成启动退出。
+
+对于采用此方案的兼容 WDA 构建，在**原始包副本**中移除 Runner.app 顶层 `Frameworks/` 下的 `XC*.framework`，然后重新签名。保留 `PlugIns/WebDriverAgentRunner.xctest` 及 WDA 自身依赖。不要对所有框架或任意版本的 WDA 直接套用删除操作，具体要求以相应 WDA 版本文档为准。
+
+任何改包操作都应在签名前完成；修改已签名包后必须重新签名。
+
+### 签名和安装
+
+使用自己的证书与描述文件，通过支持 iOS 应用签名的工具完成签名：
+
+1. 让主应用的 Bundle ID 与描述文件授权的 App ID 匹配；内嵌测试组件也要正确签名。
+2. 检查描述文件覆盖目标设备且未过期，签名完成后再安装。
+3. 开发签名和分发签名的权限不同。不能仅凭签名工具名称判断证书类型，也不能把手工修改 `get-task-allow` 当作修复办法；应以描述文件授权和实际启动验证为准。
+
+例如，安装自己生成的签名包：
+
+```powershell
+.\ios.exe install --path=artifacts/signed-WebDriverAgentRunner.ipa
 ```
 
----
+安装成功只说明安装阶段通过，还需要验证 XCTest、HTTP 服务和会话初始化。WDA 通常由电脑端驱动启动，不能仅以点击手机图标后的表现判断是否可用。
 
-### 2. 编译 WebDriverAgent
-由于 Windows 环境无法直接运行 Xcode，本仓库提供了自动化 GitHub Actions 编译工作流：
-1. 打开 GitHub 仓库的 **Actions** 选项卡。
-2. 选择 **Build WebDriverAgent for Testing** 工作流，点击 **Run workflow**。
-3. 工作流执行完毕后，在构建页面下方下载：
-   - `WDA-Full-XCTest-Bundle`：包含完整 `.xctestrun` 配置文件与 `WebDriverAgentRunner-Runner.app`。
-   - `WebDriverAgentRunner-Runner-IPA`：用于 Windows 签名工具的测试安装包。
-4. 解压下载的产物，将 `.xctestrun` 和解压后的应用放置在本地 `artifacts/` 目录下。
+## 配置与启动
 
----
+编辑 `config/settings.yaml`，将两个包名改为**自己实际安装的 WDA 主应用包名**：
 
-### 3. Windows 签名与安装
-1. 使用 **Sideloadly** 或 **zsign** 对 `WebDriverAgentRunner-Runner.ipa` 进行重签名（使用您的个人免费 Apple ID 或开发者证书）。
-2. 将已签名的 IPA 安装到 iPhone：
-   ```bash
-   python main.py discover
-   ```
-   或使用模块化安装工具：
-   ```python
-   from device.installer import AppInstaller
-   installer = AppInstaller()
-   installer.install("artifacts/signed-WebDriverAgentRunner.ipa")
-   ```
-3. 在 iPhone 上进入 **设置 -> 通用 -> VPN 与设备管理**，信任签名证书，并在 **隐私与安全性** 中打开 **开发者模式**（重启后生效）。
-
----
-
-### 4. 启动与验证
-
-#### 命令行方式 (CLI)
-
-1. **发现设备**：
-   ```bash
-   python main.py discover
-   ```
-2. **开启 iOS 17+ 隧道**（如果是 iOS 17+ 设备）：
-   ```bash
-   python main.py tunnel
-   ```
-3. **启动 WDA XCTest 服务**：
-   ```bash
-   python main.py run-wda
-   ```
-4. **截屏测试**：
-   ```bash
-   python main.py screenshot -o screen.png
-   ```
-5. **一键全流程验证**：
-   ```bash
-   python main.py init
-   ```
-
-#### 启动 FastAPI 服务
-```bash
-python main.py server --port 8000
-```
-启动后访问接口文档：`http://127.0.0.1:8000/docs`。
-
----
-
-## 🌐 FastAPI 常用接口
-
-| 方法 | 路径 | 说明 |
-| :--- | :--- | :--- |
-| `GET` | `/health` | 健康检查与 WDA 在线状态 |
-| `GET` | `/device/discovery` | 发现当前连接的 iOS 设备列表 |
-| `POST` | `/device/initialize` | 自动执行隧道建立、WDA 启动与会话初始化 |
-| `GET` | `/screenshot` | 截取屏幕（可选 `?raw=true` 直接获取 PNG 二进制） |
-| `GET` | `/source` | 获取当前界面的 UI 控件层级树（XML / JSON） |
-| `POST` | `/action/tap?x=200&y=400` | 点击指定坐标 |
-| `POST` | `/action/swipe` | 滑动屏幕（支持设定起始坐标与持续时间） |
-| `POST` | `/action/type?text=Hello` | 输入文本 |
-| `POST` | `/action/home` | 返回桌面 / 按下 Home 键 |
-| `POST` | `/action/app/launch` | 根据 Bundle ID 启动目标应用 |
-| `POST` | `/action/app/terminate` | 根据 Bundle ID 终止目标应用 |
-| `POST` | `/action/execute` | 执行标准化 JSON Action 指令 |
-
----
-
-## 🐍 Python 代码调用示例
-
-```python
-from agent.controller import iPhoneController
-from agent.actions import TapAction, SwipeAction, InputAction
-
-# 初始化控制器（自动读取 config/settings.yaml）
-controller = iPhoneController()
-ok, msg = controller.initialize()
-if not ok:
-    print(f"初始化失败: {msg}")
-    exit(1)
-
-# 1. 截屏
-img = controller.capture_screenshot()
-img.save("current.png")
-
-# 2. 点击指定坐标
-controller.execute_action(TapAction(x=200, y=350))
-
-# 3. 输入文本
-controller.execute_action(InputAction(text="Hello from Windows!"))
-
-# 4. 滑动屏幕
-controller.execute_action(SwipeAction(from_x=200, from_y=600, to_x=200, to_y=200, duration=0.4))
-
-# 5. 返回主屏幕
-controller.gestures.press_home()
+```yaml
+device:
+  udid: ""  # 留空自动发现；多设备时填写自己的 UDID
+  bundle_id: "com.example.WebDriverAgentRunner.xctrunner"
+  testrunner_bundle_id: "com.example.WebDriverAgentRunner.xctrunner"
+  xctestrun_path: ""
+  app_path: "artifacts/signed-WebDriverAgentRunner.ipa"
 ```
 
----
+`com.example...` 是占位示例。`app_path` 是安装包路径配置；WebUI 一键流程不会自动签名或安装 IPA，需要先完成安装。
 
-## 📄 开源许可
-MIT License.
+```powershell
+.\.venv\Scripts\python.exe main.py web --no-open
+```
+
+打开 [WebUI](http://127.0.0.1:8000/)，点击“一键全流程连接与启动”。依次验证设备发现、配对、隧道、WDA 和会话；完成后显示实际屏幕尺寸。
+
+也可分别在终端运行：
+
+```powershell
+# 查看设备
+.\.venv\Scripts\python.exe main.py discover
+# 保持此终端运行隧道与端口转发
+.\.venv\Scripts\python.exe main.py tunnel
+# 在另一终端启动 WDA，并保持运行
+.\.venv\Scripts\python.exe main.py run-wda
+```
+
+## WDA 启动超时排查
+
+| 表现 | 检查方向 |
+| --- | --- |
+| 没有发现设备 | USB 驱动、数据线、解锁和信任状态 |
+| 隧道进程运行，但无法启动 XCTest | 确认隧道信息已就绪；本程序兼容本地 60105、28100 信息端口，并向启动进程传入设备地址、RSD 端口和用户态端口 |
+| XCTest 已启动，但本机 8100 不通 | CoreDevice 隧道与 WDA 端口转发是两个步骤；确认 `ios forward 8100 8100` 运行 |
+| `Failed to establish connection to the IDE` | 查看手机端日志，检查 WDA/XCTest 框架兼容性、签名包名和驱动版本；不能只靠延长超时解决 |
+| WDA 在线但无法控制 | 检查会话初始化错误、开发者模式和设备自动化权限 |
+
+程序合并读取子进程输出，避免标准错误管道阻塞；启动失败会显示近期日志，超时会结束本次启动进程。
+
+## API 与测试
+
+接口文档：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)。
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/api/status/all` | 设备、隧道、WDA、会话与流程状态 |
+| POST | `/api/pipeline/start` | 启动全流程 |
+| POST | `/api/pipeline/stop` | 停止会话与后台进程 |
+| GET | `/api/screen/latest` | Base64 截图 |
+| GET | `/api/screen/raw` | PNG 截图 |
+| POST | `/api/action/tap` | 点击，JSON 请求体包含 x、y |
+| POST | `/api/action/type` | 输入，JSON 请求体包含 text |
+| POST | `/api/action/app/launch` | 启动应用，JSON 请求体包含 bundle_id |
+| GET | `/api/logs` | 运行日志 |
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+测试覆盖隧道目标选择、用户态连接参数、端口转发生命周期和 XCTest 握手失败处理。单元测试通过不等于所有 iOS、WDA 和签名组合都已实机验证。
