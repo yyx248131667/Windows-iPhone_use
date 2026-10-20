@@ -54,5 +54,19 @@ devimages/
 *.pfx
 *.mobileprovision
 *.key
+*.pem
+*.p8
+*.cer
+*.crt
+*.der
+.env
+.env.*
+!.env.example
 selfIdentity.plist
 config/settings.local.yaml
+config/*.local.yml
+*.keychain
+*.keychain-db
+
+# Locally downloaded AirPlay receiver runtime
+.runtime/

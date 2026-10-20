@@ -1,0 +1,85 @@
+name: Build experimental WDA fast touch
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/wda-fast-touch]
+    paths:
+      - '.github/workflows/wda-fast-touch.yml'
+      - 'tools/patch_wda_fast_touch.py'
+      - 'tools/wda_fast_touch.m.inc'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned upstream WDA
+        uses: actions/checkout@v4
+        with:
+          repository: appium/WebDriverAgent
+          ref: 3d6a4e03cdd673e540289c610f7e189f8ffea434
+          path: WebDriverAgent
+      - name: Select Xcode 26.2
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+          xcodebuild -version
+      - name: Apply experimental direct touch route
+        run: |
+          python3 tools/patch_wda_fast_touch.py WebDriverAgent
+          git -C WebDriverAgent diff --check
+          git -C WebDriverAgent diff > wda-fast-touch.patch
+      - name: Build unsigned device test runner
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -project WebDriverAgent/WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner -configuration Release \
+            -destination 'generic/platform=iOS' -sdk iphoneos \
+            -derivedDataPath build_output \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO | tee build.log
+      - name: Package unsigned IPA and full test products
+        run: |
+          set -euo pipefail
+          PRODUCTS=build_output/Build/Products
+          APP="$PRODUCTS/Release-iphoneos/WebDriverAgentRunner-Runner.app"
+          test -d "$APP/PlugIns/WebDriverAgentRunner.xctest"
+          find "$PRODUCTS" -maxdepth 1 -name '*.xctestrun' | grep .
+          mkdir -p dist/ipa/Payload
+          cp -R "$APP" dist/ipa/Payload/
+          # Use system XCTest on device after local signing, as in the working Windows setup.
+          FRAMEWORKS=dist/ipa/Payload/WebDriverAgentRunner-Runner.app/Frameworks
+          if [ -d "$FRAMEWORKS" ]; then
+            find "$FRAMEWORKS" -maxdepth 1 -name 'XC*.framework' -exec rm -rf {} +
+          fi
+          (cd dist/ipa && zip -qry ../WDA-fast-touch-unsigned.ipa Payload)
+          ditto -c -k --sequesterRsrc --keepParent "$PRODUCTS" dist/WDA-fast-touch-test-products.zip
+          cp WebDriverAgent/LICENSE dist/UPSTREAM-LICENSE
+          cp wda-fast-touch.patch dist/
+          printf '%s\n' 'UNSIGNED experimental build; local signing required.' \
+            'Upstream: 3d6a4e03cdd673e540289c610f7e189f8ffea434' \
+            'POST /session/{id}/wda/fastTap; portrait only; actual completion required.' \
+            'Input: x, y, width, height, orientation=1. Output: completed and timing.' \
+            '300 ms is a test target, not a guaranteed result.' > dist/BUILD-INFO.txt
+          shasum -a 256 dist/*.ipa dist/*.zip > dist/SHA256SUMS
+      - name: Upload candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: WDA-fast-touch-unsigned
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WDA-fast-touch-build-log
+          path: |
+            build.log
+            wda-fast-touch.patch
+          retention-days: 7

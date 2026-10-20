@@ -56,7 +56,9 @@ python -m venv .venv
 
 ## 配置与启动
 
-编辑 `config/settings.yaml`，将两个包名改为**自己实际安装的 WDA 主应用包名**：
+个人配置可写入已被 Git 忽略的 `config/settings.local.yaml`，程序会将其合并到通用默认配置，避免把个人包名放进开源文件。
+
+编辑配置，将两个包名改为**自己实际安装的 WDA 主应用包名**：
 
 ```yaml
 device:
@@ -86,6 +88,45 @@ device:
 .\.venv\Scripts\python.exe main.py run-wda
 ```
 
+## USB 连续画面
+
+默认“自动：优先 USB”通过独立端口读取 WDA 的 MJPEG 连续画面，无需在手机上选择接收器。画面端口与控制请求分开，网页不再反复调用截图接口。默认 30 fps、50% 尺寸、40% JPEG 质量；实际帧率取决于手机和 WDA。可通过 `wda.settings` 调整这三个 MJPEG 设置，通过 `usb_screen` 修改本机和手机端口。
+
+自动模式依次选择 USB、已连接的 AirPlay、截图预览；也可手动选择来源。页面不可见或停止同步后，无其他观看连接时会在约 8 秒后停止读取 USB 画面，只保留最新一帧。USB 不会消除 XCTest 控制本身的耗时。
+
+设计参考 [iPhone-use](https://github.com/zhongerxin/iPhone-use) 的独立 USB MJPEG 通道、最新帧缓存及滚轮合并策略；Windows 转发和网页接入在本项目实现。
+
+## AirPlay 连续画面（可选）
+
+可使用开源 [UxPlay](https://github.com/FDH2/UxPlay) 接收 iPhone 的 AirPlay 屏幕镜像，WDA 继续负责点击、滑动、输入和应用启动。画面与控制相互独立，AirPlay 不会自动缩短 XCTest 执行动作的时间。
+
+Windows 安装方式（Python 3.12+、Git，需要下载约数百 MB，安装后约 2 GB）：
+
+```powershell
+.\.venv\Scripts\python.exe tools/setup_airplay.py
+```
+
+脚本在 `.runtime/airplay/` 中安装便携 MSYS2、GStreamer，并从固定的 UxPlay 上游源码版本编译接收器，不安装系统服务。这些运行时和 UxPlay 生成的本机身份文件不纳入 Git。UxPlay 使用 GPLv3 许可；若另外分发其二进制，应遵守上游许可要求。
+
+1. 正常启动 WebUI 与 WDA，在画面上方点击“启动 AirPlay”。
+2. iPhone 与电脑接入可互通的同一局域网，在控制中心选择“屏幕镜像”→“Windows-iPhone”。
+3. 默认优先使用 USB；可手动选择“AirPlay 画面”，或在 USB 不可用时由自动模式选择 AirPlay。连续画面接通后停止截图轮询。
+4. 画面已投送但无法点击时，检查 WDA 是否在线。AirPlay 画面可以独立显示，但控制仍需 WDA。
+
+接收器使用 TCP/UDP 7100–7102 和局域网 mDNS 发现。若手机找不到接收器，检查 Windows 的应用防火墙授权、VPN 和路由器的客户端隔离；不要把本地 WebUI 或帧转发端口暴露到公网。
+
+如果手机列表里找不到接收器，且 Windows 防火墙拦截了接收器，可在**管理员 PowerShell**中运行（项目目录下）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\configure_airplay_firewall.ps1
+```
+
+脚本仅为接收器程序在选定网卡的本地子网放行所需端口，兼容“专用”和“公用”网络分类，不关闭防火墙，也不开放网页服务或本地画面桥接端口。自定义路径或网卡时可传入 `-ReceiverPath`、`-InterfaceAlias`；用 `-Remove` 可移除这两条规则。若自定义了接收端口，需要相应调整脚本中的端口范围。
+
+实现方式：UxPlay 解码手机发送的视频，由 GStreamer 将画面编码为 JPEG，通过仅监听 `127.0.0.1:7110` 的桥接端口送入 Python；网页使用连续 MJPEG 显示。只保留最新帧，慢客户端不会积压历史帧。此版本不转发音频，不是浏览器原生 H.264/WebRTC 播放；帧率目标为 30 fps，实际延迟与帧率需要按设备和网络实测。
+
+已自行安装 UxPlay 时，可在 `config/settings.local.yaml` 中设置 `airplay.uxplay_bin`。WebUI 提供 `/api/airplay/status`、`/api/airplay/start`、`/api/airplay/stop` 和 `/api/airplay/stream` 接口。启动或退出接收器不会停止 WDA；退出后端服务时会停止其管理的接收器。
+
 ## WDA 启动超时排查
 
 | 表现 | 检查方向 |
@@ -99,6 +140,10 @@ device:
 程序合并读取子进程输出，避免标准错误管道阻塞；启动失败会显示近期日志，超时会结束本次启动进程。
 
 ## API 与测试
+
+实验性低延迟点击的 GitHub 编译、安装后启用方法及测量结果见 [WDA fast touch](docs/wda-fast-touch.md)。签名在本地完成，证书、设备配对记录和签名产物不纳入 Git。
+
+交互采用标准触摸动作，点击与滑动按顺序执行，最多暂存两次后续操作；操作失败会清空待执行动作。画面留白不参与坐标换算，鼠标滚轮可滑动手机页面。WDA 会话默认缩短空闲等待并关闭动画冷却，可通过 `wda.settings` 调整；页面仍在动画中时，建议等待画面稳定后再点击。
 
 接口文档：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)。
 

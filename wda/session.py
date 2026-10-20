@@ -10,22 +10,29 @@ class WDASession:
     Manages an active WebDriverAgent test session.
     """
 
-    def __init__(self, client: WDAClient, session_id: Optional[str] = None):
+    def __init__(self, client: WDAClient, session_id: Optional[str] = None, settings=None, capabilities=None):
         self.client = client
         self.session_id = session_id
+        self.settings = settings if settings is not None else {
+            "waitForIdleTimeout": 0.05, "animationCoolOffTimeout": 0.0}
+        self.capabilities = capabilities or {}
         self._window_size: Optional[Tuple[int, int]] = None
 
     def start(self, capabilities: Optional[Dict[str, Any]] = None) -> str:
         """Create a new session on WDA."""
         payload = {
             "capabilities": {
-                "firstMatch": [capabilities or {}]
+                "firstMatch": [{"waitForIdleTimeout": self.settings.get("waitForIdleTimeout", 0.05),
+                                **self.capabilities, **(capabilities or {})}]
             }
         }
         res = self.client.post("/session", json_data=payload)
         self.session_id = res.get("sessionId") or res.get("value", {}).get("sessionId")
         if not self.session_id:
             raise RuntimeError(f"Failed to create WDA session: {res}")
+        if self.settings:
+            self.client.post(f"/session/{self.session_id}/appium/settings",
+                             json_data={"settings": self.settings})
         logger.info(f"Started WDA session: {self.session_id}")
         return self.session_id
 

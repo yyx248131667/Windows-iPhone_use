@@ -6,6 +6,15 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+class WDAError(RuntimeError):
+    """A WDA HTTP or protocol error, which must not be reported as success."""
+
+    def __init__(self, message, status_code=None, error=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error = error
+
+
 class WDAClient:
     """
     HTTP client for WebDriverAgent RESTful API.
@@ -26,13 +35,15 @@ class WDAClient:
         url = self._url(path)
         last_exception = None
 
-        for attempt in range(1, self.max_retries + 1):
+        timeout = kwargs.pop("timeout", self.timeout)
+        attempts = kwargs.pop("max_retries", self.max_retries if method.upper() == "GET" else 1)
+        for attempt in range(1, attempts + 1):
             try:
                 resp = self.session.request(
                     method=method,
                     url=url,
                     json=json_data,
-                    timeout=self.timeout,
+                    timeout=timeout,
                     **kwargs,
                 )
                 
@@ -41,14 +52,20 @@ class WDAClient:
                     logger.warning(f"HTTP {resp.status_code} on {method} {url}: {resp.text[:200]}")
                 
                 try:
-                    return resp.json()
+                    data = resp.json()
                 except ValueError:
-                    return {"statusCode": resp.status_code, "raw": resp.text}
+                    raise WDAError(f"WDA returned HTTP {resp.status_code}: {resp.text[:200]}")
+                value = data.get("value")
+                error = value.get("error") if isinstance(value, dict) else None
+                if resp.status_code >= 400 or error or data.get("status", 0) not in (0, None):
+                    message = value.get("message", error) if isinstance(value, dict) else str(value)
+                    raise WDAError(f"WDA HTTP {resp.status_code}: {message}", resp.status_code, error)
+                return data
 
             except requests.RequestException as e:
                 last_exception = e
-                logger.warning(f"Attempt {attempt}/{self.max_retries} failed on {method} {url}: {e}")
-                if attempt < self.max_retries:
+                logger.warning(f"Attempt {attempt}/{attempts} failed on {method} {url}: {e}")
+                if attempt < attempts:
                     time.sleep(1.0)
 
         raise ConnectionError(f"Failed to connect to WDA at {url}: {last_exception}")

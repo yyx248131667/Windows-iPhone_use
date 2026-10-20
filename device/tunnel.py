@@ -5,6 +5,7 @@ import socket
 import subprocess
 import threading
 import time
+import requests
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,8 @@ class TunnelManager:
         self.device_port = device_port
         self.ios_version = ios_version
         self._process: Optional[subprocess.Popen] = None
+        self._forward_process: Optional[subprocess.Popen] = None
+        self._last_logs = []
         self._is_running = False
         self._log_thread: Optional[threading.Thread] = None
 
@@ -93,8 +96,9 @@ class TunnelManager:
             self._process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8", errors="replace",
                 bufsize=1,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             )
@@ -104,10 +108,9 @@ class TunnelManager:
             def _log_output(proc: subprocess.Popen):
                 for line in iter(proc.stdout.readline, ""):
                     if line:
-                        logger.debug(f"[Tunnel STDOUT] {line.strip()}")
-                for line in iter(proc.stderr.readline, ""):
-                    if line:
-                        logger.warning(f"[Tunnel STDERR] {line.strip()}")
+                        self._last_logs.append(line.strip())
+                        del self._last_logs[:-100]
+                        logger.info(f"[Tunnel] {line.strip()}")
 
             self._log_thread = threading.Thread(target=_log_output, args=(self._process,), daemon=True)
             self._log_thread.start()
@@ -115,9 +118,54 @@ class TunnelManager:
             # Wait briefly to ensure it didn't exit immediately with an error
             time.sleep(1.5)
             if self._process.poll() is not None:
-                err = self._process.stderr.read() if self._process.stderr else "Unknown error"
+                err = "\n".join(self._last_logs[-10:])
                 self._is_running = False
                 return False, f"Tunnel process exited immediately (code {self._process.returncode}): {err.strip()}"
+
+            if self.is_ios_17_plus:
+                ready = False
+                deadline = time.monotonic() + 25
+                with requests.Session() as http:
+                    http.trust_env = False
+                    while time.monotonic() < deadline and self._process.poll() is None:
+                        for port in (60105, 28100):
+                            try:
+                                response = http.get(f"http://127.0.0.1:{port}/tunnels", timeout=1)
+                                response.raise_for_status()
+                                infos = response.json()
+                                ready = isinstance(infos, list) and any(
+                                    (not self.udid or t.get("udid") == self.udid)
+                                    and t.get("address") and t.get("rsdPort") for t in infos
+                                )
+                                if ready:
+                                    break
+                            except (requests.RequestException, ValueError, TypeError):
+                                pass
+                        if ready:
+                            break
+                        time.sleep(0.5)
+                if not ready:
+                    detail = "\n".join(self._last_logs[-10:])
+                    self.stop_tunnel()
+                    return False, f"CoreDevice tunnel did not become ready: {detail}"
+                if not tool_path:
+                    self.stop_tunnel()
+                    return False, "go-ios is required for WDA port forwarding."
+                forward_cmd = [tool_path, "forward", str(self.local_port), str(self.device_port)]
+                if self.udid:
+                    forward_cmd.extend(["--udid", self.udid])
+                logger.info(f"Starting WDA port forward: {' '.join(forward_cmd)}")
+                self._forward_process = subprocess.Popen(
+                    forward_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace",
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                )
+                threading.Thread(target=_log_output, args=(self._forward_process,), daemon=True).start()
+                time.sleep(0.5)
+                if self._forward_process.poll() is not None:
+                    detail = "\n".join(self._last_logs[-10:])
+                    self.stop_tunnel()
+                    return False, f"WDA port forwarding failed: {detail}"
 
             return True, f"Tunnel started successfully (PID: {self._process.pid})."
 
@@ -128,6 +176,15 @@ class TunnelManager:
 
     def stop_tunnel(self) -> None:
         """Gracefully stop the background tunnel process."""
+        if self._forward_process:
+            if self._forward_process.poll() is None:
+                self._forward_process.terminate()
+                try:
+                    self._forward_process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self._forward_process.kill()
+                    self._forward_process.wait()
+            self._forward_process = None
         if self._process and self._process.poll() is None:
             logger.info(f"Terminating tunnel process (PID: {self._process.pid})...")
             try:
@@ -141,6 +198,6 @@ class TunnelManager:
 
     def is_alive(self) -> bool:
         """Check if tunnel process is alive and active."""
-        if self._process and self._process.poll() is None:
-            return True
-        return False
+        return (self._process is not None and self._process.poll() is None
+                and (not self.is_ios_17_plus or
+                     (self._forward_process is not None and self._forward_process.poll() is None)))

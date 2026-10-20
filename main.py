@@ -25,11 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
-def load_config(config_path: str = "config/settings.yaml") -> dict:
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    return {}
+from config import load_config
 
 
 def cmd_discover(args, cfg):

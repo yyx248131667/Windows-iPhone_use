@@ -62,10 +62,12 @@ class iPhoneController:
         self.wda_runner: Optional[WDARunner] = None
 
         self.client = WDAClient(base_url=self.wda_base_url)
-        self.session = WDASession(client=self.client)
+        self.session = WDASession(client=self.client, settings=wda_cfg.get("settings"),
+                                  capabilities=wda_cfg.get("capabilities"))
         self.screenshot = WDAScreenshot(client=self.client)
         self.elements = WDAElements(client=self.client, session=self.session)
-        self.gestures = WDAGestures(client=self.client, session=self.session)
+        self.gestures = WDAGestures(client=self.client, session=self.session,
+                                    fast_touch=bool(wda_cfg.get("fast_touch", False)))
 
     def initialize(self, auto_start_tunnel: bool = True, auto_start_wda: bool = True) -> Tuple[bool, str]:
         """
@@ -83,6 +85,7 @@ class iPhoneController:
             return False, "No connected iPhone detected. Please connect your iPhone via USB and unlock the screen."
         
         self.udid = self.device_info.udid
+        self.pairing.udid = self.udid
         logger.info(f"Target device: {self.device_info.device_name} (UDID: {self.udid}, iOS: {self.device_info.product_version})")
 
         # 2. Check pairing

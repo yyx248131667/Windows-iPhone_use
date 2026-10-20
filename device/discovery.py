@@ -56,7 +56,7 @@ class DeviceDiscovery:
         tool_path = self._resolve_tool_path()
         if tool_path:
             try:
-                for cmd_args in [["list"], ["list", "--details"]]:
+                for cmd_args in [["list", "--details"], ["list"]]:
                     res = subprocess.run([tool_path] + cmd_args, capture_output=True, text=True, timeout=4)
                     if res.returncode == 0 and res.stdout.strip():
                         for line in res.stdout.splitlines():
@@ -95,25 +95,6 @@ class DeviceDiscovery:
             except Exception as e:
                 logger.warning(f"go-ios list check: {e}")
 
-        # 2. Check local Apple Lockdown pair records for known device
-        lockdown_dir = r"C:\ProgramData\Apple\Lockdown"
-        if os.path.exists(lockdown_dir):
-            try:
-                for f in os.listdir(lockdown_dir):
-                    if f.endswith(".plist") and len(f) > 20 and not f.startswith("System"):
-                        udid_guess = f[:-6]
-                        devices.append(DeviceInfo(
-                            udid=udid_guess,
-                            device_name="iPhone (Paired)",
-                            product_type="iPhone",
-                            product_version="17.0",
-                            connection_type="USB",
-                        ))
-                if devices:
-                    return devices
-            except Exception:
-                pass
-
         return devices
 
     def get_default_device(self, preferred_udid: Optional[str] = None) -> Optional[DeviceInfo]:
@@ -128,13 +109,4 @@ class DeviceDiscovery:
                         return d
             return devices[0]
 
-        # If preferred UDID was configured, fallback to it
-        if preferred_udid:
-            return DeviceInfo(
-                udid=preferred_udid,
-                device_name="iPhone",
-                product_type="iPhone",
-                product_version="17.0",
-                connection_type="USB",
-            )
         return None

@@ -5,9 +5,12 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 import yaml
+from config import load_config
+from airplay.receiver import AirPlayReceiver
+from wda.stream import USBScreen
 from fastapi import FastAPI, HTTPException, Query, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -65,6 +68,64 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+airplay_receiver = AirPlayReceiver(load_config().get("airplay", {}))
+usb_screen = USBScreen(load_config().get("usb_screen", {}))
+
+
+@app.on_event("shutdown")
+def stop_airplay_on_shutdown():
+    usb_screen.stop()
+    airplay_receiver.stop()
+
+
+@app.get("/api/usb/status")
+def usb_status(enabled: bool = False):
+    if enabled:
+        ctrl = get_controller()
+        if ctrl.session.session_id and ctrl.udid:
+            try:
+                usb_screen.start(ctrl.go_ios_bin, ctrl.udid)
+            except Exception as e:
+                raise HTTPException(status_code=503, detail=str(e))
+    return usb_screen.status()
+
+
+@app.get("/api/usb/stream")
+def usb_stream():
+    if not usb_screen.status()["running"]:
+        raise HTTPException(status_code=503, detail="USB 画面未连接")
+    return StreamingResponse(usb_screen.frames(), media_type="multipart/x-mixed-replace; boundary=frame",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/airplay/status")
+def airplay_status():
+    return airplay_receiver.status()
+
+
+@app.post("/api/airplay/start")
+def start_airplay():
+    try:
+        return airplay_receiver.start()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/api/airplay/stop")
+def stop_airplay():
+    airplay_receiver.stop()
+    return airplay_receiver.status()
+
+
+@app.get("/api/airplay/stream")
+def airplay_stream():
+    if not airplay_receiver.status()["running"]:
+        raise HTTPException(status_code=503, detail="AirPlay receiver is not running")
+    return StreamingResponse(airplay_receiver.frames(),
+                             media_type="multipart/x-mixed-replace; boundary=frame",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 # Global controller instance and pipeline state
 controller: Optional[iPhoneController] = None
 pipeline_state = {
@@ -86,9 +147,7 @@ def get_controller() -> iPhoneController:
     if controller is None:
         cfg = {}
         try:
-            if os.path.exists("config/settings.yaml"):
-                with open("config/settings.yaml", "r", encoding="utf-8") as f:
-                    cfg = yaml.safe_load(f) or {}
+            cfg = load_config()
         except Exception as e:
             logger.warning(f"Failed to load config/settings.yaml: {e}")
         controller = iPhoneController(config=cfg)
@@ -134,9 +193,9 @@ def get_all_status():
     # 4. Session status & Screen Size
     session_active = bool(ctrl.session.session_id)
     screen_width, screen_height = 390, 844  # default standard fallback
-    if session_active or wda_online:
+    if session_active:
         try:
-            size = ctrl.session.get_window_size()
+            size = ctrl.session._window_size or ctrl.session.get_window_size()
             if size and size[0] > 0 and size[1] > 0:
                 screen_width, screen_height = size[0], size[1]
                 session_active = True
@@ -179,6 +238,7 @@ def _run_pipeline_worker():
         return
     ctrl.device_info = dev
     ctrl.udid = dev.udid
+    ctrl.pairing.udid = dev.udid
     pipeline_state["steps"]["discovery"] = "success"
 
     # Step 2: Pairing
@@ -272,7 +332,9 @@ def start_pipeline(bg_tasks: BackgroundTasks):
 def stop_pipeline():
     global pipeline_state
     ctrl = get_controller()
+    usb_screen.stop()
     ctrl.shutdown()
+    airplay_receiver.stop()
     pipeline_state["status"] = "idle"
     pipeline_state["current_step"] = "所有服务已停止"
     for k in pipeline_state["steps"]:
@@ -305,10 +367,25 @@ def get_screen_raw():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/screen/preview")
+def get_screen_preview():
+    """Small JPEG for interactive mirroring; full PNG remains available separately."""
+    try:
+        img = get_controller().screenshot.get_image().convert("RGB")
+        img.thumbnail((600, 1300))
+        output = io.BytesIO()
+        img.save(output, format="JPEG", quality=65)
+        return Response(output.getvalue(), media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 # -------------------------------------------------------------
 # Interactive Touch & Actions
 # -------------------------------------------------------------
 class TapRequest(BaseModel):
+    portrait: bool = False  # Caller verified the displayed frame is portrait.
     x: Optional[float] = None
     y: Optional[float] = None
     normalized_x: Optional[float] = None  # 0.0 - 1.0
@@ -322,7 +399,7 @@ def action_tap(req: TapRequest):
 
     if req.normalized_x is not None and req.normalized_y is not None:
         try:
-            width, height = ctrl.session.get_window_size()
+            width, height = ctrl.session._window_size or ctrl.session.get_window_size()
         except Exception:
             width, height = 390, 844
         tx = req.normalized_x * width
@@ -332,7 +409,7 @@ def action_tap(req: TapRequest):
         raise HTTPException(status_code=400, detail="Missing coordinate values.")
 
     try:
-        res = ctrl.gestures.tap(round(tx, 1), round(ty, 1))
+        res = ctrl.gestures.tap(round(tx, 1), round(ty, 1), portrait=req.portrait)
         return {"success": True, "tap_at": {"x": tx, "y": ty}, "result": res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -358,13 +435,13 @@ def action_swipe(req: SwipeRequest):
 
     if req.norm_from_x is not None and req.norm_from_y is not None:
         try:
-            width, height = ctrl.session.get_window_size()
+            width, height = ctrl.session._window_size or ctrl.session.get_window_size()
         except Exception:
             width, height = 390, 844
         fx = req.norm_from_x * width
         fy = req.norm_from_y * height
-        tx = (req.norm_to_x or req.norm_from_x) * width
-        ty = (req.norm_to_y or req.norm_from_y) * height
+        tx = (req.norm_to_x if req.norm_to_x is not None else req.norm_from_x) * width
+        ty = (req.norm_to_y if req.norm_to_y is not None else req.norm_from_y) * height
 
     try:
         res = ctrl.gestures.swipe(round(fx, 1), round(fy, 1), round(tx, 1), round(ty, 1), req.duration)

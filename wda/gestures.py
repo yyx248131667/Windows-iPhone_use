@@ -1,6 +1,6 @@
 import logging
 from typing import Any, Dict, Optional
-from .client import WDAClient
+from .client import WDAClient, WDAError
 from .session import WDASession
 
 logger = logging.getLogger(__name__)
@@ -11,15 +11,50 @@ class WDAGestures:
     Implements touch interactions, gestures, hardware key actions, and app control.
     """
 
-    def __init__(self, client: WDAClient, session: WDASession):
+    def __init__(self, client: WDAClient, session: WDASession, fast_touch: bool = False):
         self.client = client
         self.session = session
+        self.fast_touch = fast_touch
+        self._unsupported_fast_session = None
 
-    def tap(self, x: float, y: float) -> Dict[str, Any]:
-        """Tap at screen coordinate (x, y)."""
+    def _touch(self, actions, legacy_path, legacy_payload):
         sid = self.session.ensure_session()
-        payload = {"x": x, "y": y}
-        return self.client.post(f"/session/{sid}/wda/tap/nil", json_data=payload)
+        payload = {"actions": [{"type": "pointer", "id": "finger",
+                   "parameters": {"pointerType": "touch"}, "actions": actions}]}
+        try:
+            return self.client.post(f"/session/{sid}/actions", json_data=payload)
+        except WDAError as e:
+            # Only an unsupported endpoint is safe to fall back from; never
+            # repeat a gesture after a timeout or other ambiguous failure.
+            if e.status_code != 404 or e.error != "unknown command":
+                raise
+            return self.client.post(f"/session/{sid}{legacy_path}", json_data=legacy_payload)
+
+    @staticmethod
+    def _move(x, y, duration=0):
+        return {"type": "pointerMove", "origin": "viewport", "x": round(x),
+                "y": round(y), "duration": duration}
+
+    def tap(self, x: float, y: float, portrait: bool = False) -> Dict[str, Any]:
+        """Use direct touch synthesis instead of XCUI coordinate.tap waiting."""
+        if self.fast_touch and portrait and self.session._window_size:
+            width, height = self.session._window_size
+            sid = self.session.ensure_session()
+            if width <= height and sid != self._unsupported_fast_session:
+                try:
+                    result = self.client.post(f"/session/{sid}/wda/fastTap", json_data={
+                        "x": x, "y": y, "width": width, "height": height, "orientation": 1})
+                    if result.get("value", {}).get("completed") is not True:
+                        raise WDAError("Fast touch did not confirm completion; inspect the phone before retrying")
+                    return result
+                except WDAError as e:
+                    if e.status_code != 404 or e.error != "unknown command":
+                        raise
+                    self._unsupported_fast_session = sid
+        return self._touch([self._move(x, y), {"type": "pointerDown", "button": 0},
+                            {"type": "pause", "duration": 20},
+                            {"type": "pointerUp", "button": 0}],
+                           "/wda/tap", {"x": x, "y": y})
 
     def double_tap(self, x: float, y: float) -> Dict[str, Any]:
         """Double tap at (x, y)."""
@@ -35,15 +70,13 @@ class WDAGestures:
 
     def swipe(self, from_x: float, from_y: float, to_x: float, to_y: float, duration: float = 0.5) -> Dict[str, Any]:
         """Drag / swipe from coordinate A to coordinate B."""
-        sid = self.session.ensure_session()
-        payload = {
-            "fromX": from_x,
-            "fromY": from_y,
-            "toX": to_x,
-            "toY": to_y,
-            "duration": duration,
-        }
-        return self.client.post(f"/session/{sid}/wda/dragfromtoforduration", json_data=payload)
+        payload = {"fromX": from_x, "fromY": from_y, "toX": to_x,
+                   "toY": to_y, "duration": duration}
+        return self._touch([
+            self._move(from_x, from_y), {"type": "pointerDown", "button": 0},
+            self._move(to_x, to_y, max(30, round(duration * 1000))),
+            {"type": "pointerUp", "button": 0}],
+            "/wda/dragfromtoforduration", payload)
 
     def scroll(self, direction: str = "down") -> Dict[str, Any]:
         """
@@ -81,6 +114,7 @@ class WDAGestures:
             "bundleId": bundle_id,
             "arguments": arguments or [],
             "environment": environment or {},
+            "shouldWaitForQuiescence": False,
         }
         return self.client.post(f"/session/{sid}/wda/apps/launch", json_data=payload)
 

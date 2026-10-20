@@ -29,10 +29,18 @@ tunnel:
   health_check_interval: 5
 
 wda:
+  fast_touch: false  # Enable locally only after installing the experimental fast-touch runner.
   # WDA base URL (points to tunnel forwarded local port)
   base_url: "http://127.0.0.1:8100"
   timeout_seconds: 30
   max_retries: 3
+  # Interactive control: avoid multi-second XCTest animation waits.
+  settings:
+    waitForIdleTimeout: 0.05
+    animationCoolOffTimeout: 0.0
+    mjpegServerFramerate: 30
+    mjpegScalingFactor: 50
+    mjpegServerScreenshotQuality: 40
   # Default session capabilities
   capabilities:
     shouldUseCompactResponses: false
@@ -42,3 +50,14 @@ server:
   host: "127.0.0.1"
   port: 8000
   reload: false
+
+# AirPlay is optional; WDA remains responsible for taps and input.
+usb_screen:
+  local_port: 19100
+  device_port: 9100
+
+airplay:
+  name: "Windows-iPhone"
+  uxplay_bin: ""  # Auto-detect the local portable runtime or uxplay on PATH
+  port: 7100
+  bridge_port: 7110  # Loopback-only decoded video bridge

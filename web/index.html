@@ -195,11 +195,13 @@
     .phone-screen {
       position: relative;
       width: 375px;
-      height: 700px;
+      height: auto;
+      aspect-ratio: 390 / 844;
       background: #000;
       border-radius: 38px;
       overflow: hidden;
       cursor: crosshair;
+      touch-action: none;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -358,6 +360,7 @@
         <!-- App Launch -->
         <div class="input-group">
           <select id="app-select" class="select-dropdown" style="flex: 1.2;">
+            <option value="com.tencent.xin">微信</option>
             <option value="com.apple.Preferences">设置 (Preferences)</option>
             <option value="com.apple.mobilesafari">Safari 浏览器</option>
             <option value="com.apple.camera">相机 (Camera)</option>
@@ -365,9 +368,11 @@
             <option value="custom">输入自定义 Bundle ID...</option>
           </select>
           <input type="text" id="custom-bundle" class="input-text" placeholder="Bundle ID" style="display:none; flex: 1.5;">
-          <button class="btn btn-secondary" onclick="launchApp()">启动 App</button>
+          <button class="btn btn-secondary" id="btn-launch-app" onclick="launchApp()">启动 App</button>
         </div>
       </div>
+
+      <div id="action-feedback" role="status" style="color:var(--text-muted);font-size:0.85rem;"></div>
 
       <!-- Card 3: Live Logs -->
       <div class="card">
@@ -384,10 +389,23 @@
 
     <!-- Right Column: Interactive Screen Mirror -->
     <div class="right-panel">
+      <div class="card" style="margin-bottom:16px;">
+        <div class="input-group" style="margin-bottom:8px;">
+          <select id="display-mode" class="select-dropdown" onchange="changeDisplayMode()">
+            <option value="auto">自动：优先 USB</option>
+            <option value="usb">USB 连续画面</option>
+            <option value="airplay">AirPlay 画面</option>
+            <option value="wda">WDA 截图预览</option>
+          </select>
+          <button id="btn-airplay" class="btn btn-secondary" onclick="toggleAirPlay()">启动 AirPlay</button>
+        </div>
+        <p id="airplay-status" role="status" style="font-size:0.8rem;color:var(--text-muted);">正在检查 AirPlay 接收器…</p>
+      </div>
       <div class="phone-container">
-        <div class="phone-screen" id="phone-screen" onmousedown="handleMouseDown(event)" onmouseup="handleMouseUp(event)">
+        <div class="phone-screen" id="phone-screen" onpointerdown="handleMouseDown(event)" onpointerup="handleMouseUp(event)" onpointercancel="mouseStart=null">
           <div class="dynamic-island"></div>
           
+          <img id="airplay-img" style="display:none;" alt="AirPlay 画面" onload="airplayFrameLoaded()" onerror="airplayStreamFailed()">
           <img id="screen-img" src="" style="display:none;" alt="iPhone Screen">
           
           <div class="offline-placeholder" id="screen-placeholder">
@@ -415,7 +433,7 @@
           </button>
           <button class="btn-icon active" id="btn-sync" onclick="toggleSync()" title="实时同步屏幕">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            <span id="text-sync">实时同步 (1s)</span>
+            <span id="text-sync">实时同步</span>
           </button>
         </div>
       </div>
@@ -427,6 +445,21 @@
     let isSyncing = true;
     let syncInterval = null;
     let mouseStart = null;
+    let screenInFlight = false;
+    let statusInFlight = false;
+    let actionInFlight = false;
+    let actionQueue = [];
+    let wheelDelta = 0;
+    let screenObjectURL = null;
+    let airplayActive = false;
+    let streamSource = "";
+    let usbState = { running: false, streaming: false };
+    let usbStatusInFlight = false;
+    let gestureGeneration = 0;
+    let airplayState = { running: false, streaming: false };
+    let airplayStatusInFlight = false;
+    let airplayRetryAfter = 0;
+    let displayMode = "auto";
     let deviceResolution = { width: 390, height: 844 };
 
     // App select change
@@ -437,6 +470,8 @@
 
     // Fetch complete system status
     async function updateStatus() {
+      if (statusInFlight || document.hidden || actionInFlight) return;
+      statusInFlight = true;
       try {
         const res = await fetch("/api/status/all");
         if (!res.ok) return;
@@ -480,6 +515,7 @@
         // 4. Session & Screen Size
         if (data.session && data.session.screen_size) {
           deviceResolution = data.session.screen_size;
+          if (!airplayActive) document.getElementById("phone-screen").style.aspectRatio = `${deviceResolution.width} / ${deviceResolution.height}`;
         }
 
         // 5. Pipeline Steps
@@ -500,6 +536,8 @@
         }
       } catch (e) {
         console.error("Status polling failed:", e);
+      } finally {
+        statusInFlight = false;
       }
     }
 
@@ -507,29 +545,190 @@
 
     // Capture & Mirror Screen
     async function fetchScreen() {
-      if (!wdaOnline) return;
+      if (!wdaOnline || screenInFlight || actionInFlight || document.hidden || airplayActive || ["airplay", "usb"].includes(displayMode)) return;
+      screenInFlight = true;
+      let nextURL = null;
       try {
-        const res = await fetch("/api/screen/latest");
+        const res = await fetch("/api/screen/preview", { cache: "no-store" });
         if (!res.ok) return;
+        nextURL = URL.createObjectURL(await res.blob());
+        const frame = new Image();
+        frame.src = nextURL;
+        await frame.decode();
+        const img = document.getElementById("screen-img");
+        if (airplayActive || ["airplay", "usb"].includes(displayMode)) return;
+        img.src = nextURL;
+        if (screenObjectURL) URL.revokeObjectURL(screenObjectURL);
+        screenObjectURL = nextURL;
+        nextURL = null;
+        img.style.display = "block";
+        document.getElementById("screen-placeholder").style.display = "none";
+      } catch (e) {
+        console.debug("Screen update failed:", e);
+      } finally {
+        if (nextURL) URL.revokeObjectURL(nextURL);
+        screenInFlight = false;
+      }
+    }
+
+    function setAirPlayActive(active, source = "airplay") {
+      const img = document.getElementById("airplay-img");
+      if (active && (!airplayActive || streamSource !== source)) {
+        gestureGeneration++;
+        mouseStart = null;
+        img.src = "/api/" + source + "/stream?t=" + Date.now();
+      } else if (!active && airplayActive) {
+        gestureGeneration++;
+        mouseStart = null;
+        img.removeAttribute("src");
+      }
+      streamSource = active ? source : "";
+      airplayActive = active;
+      img.style.display = active ? "block" : "none";
+      document.getElementById("screen-img").style.display = active ? "none" : ["airplay", "usb"].includes(displayMode) ? "none" : screenObjectURL ? "block" : "none";
+      document.getElementById("screen-placeholder").style.display = active || (!["airplay", "usb"].includes(displayMode) && screenObjectURL) ? "none" : "flex";
+      if (!active) document.getElementById("phone-screen").style.aspectRatio = `${deviceResolution.width} / ${deviceResolution.height}`;
+    }
+
+    function airplayFrameLoaded() {
+      const img = document.getElementById("airplay-img");
+      if (airplayActive && img.naturalWidth && img.naturalHeight) {
+        gestureGeneration++;
+        mouseStart = null;
+        document.getElementById("phone-screen").style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`;
+      }
+    }
+
+    function airplayStreamFailed() {
+      airplayRetryAfter = Date.now() + 3000;
+      setAirPlayActive(false);
+      fetchScreen();
+    }
+
+    function changeDisplayMode() {
+      displayMode = document.getElementById("display-mode").value;
+      gestureGeneration++;
+      mouseStart = null;
+      selectStream();
+      updateUSBStatus();
+      fetchScreen();
+    }
+
+    function selectStream() {
+      if (document.hidden) { setAirPlayActive(false); return; }
+      const usb = isSyncing && ["auto", "usb"].includes(displayMode) && usbState.streaming;
+      const airplay = isSyncing && ["auto", "airplay"].includes(displayMode) && airplayState.streaming;
+      setAirPlayActive(Date.now() >= airplayRetryAfter && (usb || airplay), usb ? "usb" : "airplay");
+    }
+
+    async function updateUSBStatus() {
+      if (usbStatusInFlight || document.hidden) return;
+      usbStatusInFlight = true;
+      try {
+        const enabled = isSyncing && wdaOnline && ["auto", "usb"].includes(displayMode);
+        const res = await fetch("/api/usb/status?enabled=" + enabled);
+        if (!res.ok) throw new Error("USB 画面连接失败");
+        usbState = await res.json();
+      } catch (e) {
+        usbState = { running: false, streaming: false };
+      } finally {
+        usbStatusInFlight = false;
+        selectStream();
+      }
+    }
+
+    async function updateAirPlayStatus() {
+      if (airplayStatusInFlight || document.hidden) return;
+      airplayStatusInFlight = true;
+      try {
+        const res = await fetch("/api/airplay/status");
+        if (!res.ok) return;
+        airplayState = await res.json();
+        document.getElementById("btn-airplay").textContent = airplayState.running ? "停止 AirPlay" : "启动 AirPlay";
+        document.getElementById("airplay-status").textContent = usbState.streaming && ["auto", "usb"].includes(displayMode)
+          ? "USB 连续画面已连接 · 点击与输入使用 WDA"
+          : displayMode === "usb" ? (usbState.error || "正在连接 USB 连续画面…") : airplayState.streaming
+          ? "AirPlay 画面已连接 · 点击与输入使用 WDA"
+          : airplayState.running ? airplayState.message + (displayMode === "auto" ? "；暂用 WDA 预览" : "")
+          : airplayState.error ? "接收器退出：" + airplayState.error : airplayState.available ? "接收器已就绪，点击启动后在手机上选择屏幕镜像" : "尚未安装接收器，可先使用 WDA 预览；安装方法见 README";
+        selectStream();
+      } catch (e) {
+        airplayState.streaming = false;
+        selectStream();
+      } finally {
+        airplayStatusInFlight = false;
+      }
+    }
+
+    async function toggleAirPlay() {
+      const button = document.getElementById("btn-airplay");
+      button.disabled = true;
+      try {
+        const res = await fetch(airplayState.running ? "/api/airplay/stop" : "/api/airplay/start", { method: "POST" });
         const data = await res.json();
-        if (data.success && data.base64) {
-          const img = document.getElementById("screen-img");
-          const placeholder = document.getElementById("screen-placeholder");
-          img.src = `data:image/png;base64,${data.base64}`;
-          img.style.display = "block";
-          placeholder.style.display = "none";
+        if (!res.ok) throw new Error(data.detail || "接收器启动失败");
+        await updateAirPlayStatus();
+      } catch (e) {
+        document.getElementById("airplay-status").textContent = e.message;
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    function actionRequest(url, payload) {
+      const feedback = document.getElementById("action-feedback");
+      if (actionQueue.length >= 2) {
+        feedback.textContent = "操作较快，请等当前两项操作完成";
+        return Promise.resolve(false);
+      }
+      return new Promise(resolve => {
+        actionQueue.push({ url, payload, resolve });
+        drainActions();
+      });
+    }
+
+    async function drainActions() {
+      if (actionInFlight) return;
+      actionInFlight = true;
+      const feedback = document.getElementById("action-feedback");
+      try {
+        while (actionQueue.length) {
+          const item = actionQueue.shift();
+          feedback.textContent = actionQueue.length ? `正在执行，另有 ${actionQueue.length} 项等待` : "正在执行…";
+          feedback.style.color = "var(--text-muted)";
+          const started = performance.now();
+          try {
+            const res = await fetch(item.url, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: item.payload === undefined ? undefined : JSON.stringify(item.payload)
+            });
+            const data = await res.json();
+            if (!res.ok || data.success === false) throw new Error(data.detail || data.message || "操作失败");
+            feedback.textContent = `操作完成 · ${Math.round(performance.now() - started)} ms`;
+            item.resolve(true);
+          } catch (e) {
+            feedback.textContent = "操作失败：" + e.message;
+            feedback.style.color = "#ef4444";
+            item.resolve(false);
+            // Coordinates of queued gestures may no longer refer to the same screen.
+            for (const pending of actionQueue.splice(0)) pending.resolve(false);
+          }
         }
-      } catch (e) {}
+      } finally {
+        actionInFlight = false;
+        fetchScreen();
+      }
     }
 
     // Toggle Screen Sync
     function toggleSync() {
       isSyncing = !isSyncing;
+      changeDisplayMode();
       const btn = document.getElementById("btn-sync");
       const txt = document.getElementById("text-sync");
       if (isSyncing) {
         btn.classList.add("active");
-        txt.textContent = "实时同步 (1s)";
+        txt.textContent = "实时同步";
         startSyncInterval();
       } else {
         btn.classList.remove("active");
@@ -542,7 +741,7 @@
       clearInterval(syncInterval);
       syncInterval = setInterval(() => {
         if (isSyncing && wdaOnline) fetchScreen();
-      }, 1000);
+      }, 300);
     }
 
     // Pipeline Start / Stop
@@ -566,80 +765,99 @@
       }
     }
 
-    // Interactive Screen Click & Swipe Handling
+    // Map only the displayed image, excluding any letterboxing.
+    function fittedRect(bounds, width, height) {
+      const scale = Math.min(bounds.width / width, bounds.height / height);
+      return { left: bounds.left + (bounds.width - width * scale) / 2,
+               top: bounds.top + (bounds.height - height * scale) / 2,
+               width: width * scale, height: height * scale };
+    }
+
+    function screenContentRect() {
+      const img = document.getElementById(airplayActive ? "airplay-img" : "screen-img");
+      return fittedRect(document.getElementById("phone-screen").getBoundingClientRect(),
+                        img.naturalWidth || deviceResolution.width,
+                        img.naturalHeight || deviceResolution.height);
+    }
+
     function handleMouseDown(e) {
+      if (e.isPrimary === false) { mouseStart = null; return; }
+      if (e.button !== undefined && e.button !== 0) return;
+      if (!wdaOnline) {
+        document.getElementById("action-feedback").textContent = "WDA 未连接，暂时只能查看画面";
+        return;
+      }
+      const rect = screenContentRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      if (x < 0 || x > 1 || y < 0 || y > 1) return;
       const screen = document.getElementById("phone-screen");
-      const rect = screen.getBoundingClientRect();
-      mouseStart = {
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top,
-        time: Date.now()
-      };
+      if (e.pointerId !== undefined) screen.setPointerCapture(e.pointerId);
+      mouseStart = { x, y, time: performance.now(), rect, generation: gestureGeneration };
+      e.preventDefault();
     }
 
     async function handleMouseUp(e) {
-      if (!mouseStart) return;
+      const start = mouseStart;
+      mouseStart = null;
+      if (!start) return;
       const screen = document.getElementById("phone-screen");
-      const rect = screen.getBoundingClientRect();
-      const endX = e.clientX - rect.left;
-      const endY = e.clientY - rect.top;
-      const duration = (Date.now() - mouseStart.time) / 1000;
-
-      const dx = endX - mouseStart.x;
-      const dy = endY - mouseStart.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-
-      // Create Visual Touch Ripple
-      const ripple = document.createElement("div");
-      ripple.className = "touch-ripple";
-      ripple.style.left = `${mouseStart.x}px`;
-      ripple.style.top = `${mouseStart.y}px`;
-      screen.appendChild(ripple);
-      setTimeout(() => ripple.remove(), 400);
-
-      const normStartX = Math.max(0, Math.min(1, mouseStart.x / rect.width));
-      const normStartY = Math.max(0, Math.min(1, mouseStart.y / rect.height));
-
-      if (dist < 10) {
-        // Tap
-        await fetch("/api/action/tap", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ normalized_x: normStartX, normalized_y: normStartY })
-        });
+      if (e.pointerId !== undefined && screen.hasPointerCapture(e.pointerId)) screen.releasePointerCapture(e.pointerId);
+      if (start.generation !== gestureGeneration || !wdaOnline) return;
+      const currentRect = screenContentRect();
+      if (Math.abs(currentRect.width - start.rect.width) > 1 || Math.abs(currentRect.height - start.rect.height) > 1) return;
+      const endX = Math.max(0, Math.min(1, (e.clientX - start.rect.left) / start.rect.width));
+      const endY = Math.max(0, Math.min(1, (e.clientY - start.rect.top) / start.rect.height));
+      const duration = (performance.now() - start.time) / 1000;
+      const dist = Math.hypot((endX - start.x) * start.rect.width, (endY - start.y) * start.rect.height);
+      if (dist < 8) {
+        if (duration > 0.7) return;
+        await actionRequest("/api/action/tap", { normalized_x: start.x, normalized_y: start.y,
+                            portrait: start.rect.height > start.rect.width });
       } else {
-        // Swipe / Drag
-        const normEndX = Math.max(0, Math.min(1, endX / rect.width));
-        const normEndY = Math.max(0, Math.min(1, endY / rect.height));
-        await fetch("/api/action/swipe", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            norm_from_x: normStartX,
-            norm_from_y: normStartY,
-            norm_to_x: normEndX,
-            norm_to_y: normEndY,
-            duration: Math.max(0.3, Math.min(1.0, duration))
-          })
+        await actionRequest("/api/action/swipe", {
+          norm_from_x: start.x, norm_from_y: start.y,
+          norm_to_x: endX, norm_to_y: endY,
+          duration: Math.max(0.06, Math.min(0.7, duration))
         });
       }
-      mouseStart = null;
-      // Fetch fresh screenshot shortly after gesture
-      setTimeout(fetchScreen, 300);
     }
+
+    let wheelAt = -Infinity;
+    let wheelConsumed = false;
+    document.getElementById("phone-screen").addEventListener("wheel", e => {
+      if (e.ctrlKey || e.metaKey) return;
+      e.preventDefault();
+      const now = performance.now();
+      if (now - wheelAt > 180) { wheelConsumed = false; wheelDelta = 0; }
+      wheelAt = now;
+      if (!wdaOnline || actionInFlight || mouseStart) { wheelConsumed = true; return; }
+      if (wheelConsumed) return;
+      const rect = screenContentRect();
+      if (e.clientX < rect.left || e.clientX > rect.left + rect.width || e.clientY < rect.top || e.clientY > rect.top + rect.height) return;
+      const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? rect.height : 1;
+      wheelDelta += (horizontal ? e.deltaX : e.deltaY) * unit;
+      if (!Number.isFinite(wheelDelta) || Math.abs(wheelDelta) < 24) return;
+      wheelConsumed = true;
+      const delta = wheelDelta;
+      const distance = horizontal ? 0.65 : 0.45;
+        const direction = delta > 0 ? -1 : 1;
+        actionRequest("/api/action/swipe", {
+          norm_from_x: horizontal ? 0.5 - direction * distance / 2 : 0.5,
+          norm_from_y: horizontal ? 0.5 : 0.5 - direction * distance / 2,
+          norm_to_x: horizontal ? 0.5 + direction * distance / 2 : 0.5,
+          norm_to_y: horizontal ? 0.5 : 0.5 + direction * distance / 2,
+          duration: 0.15
+        });
+    }, { passive: false });
 
     // Action Helpers
     async function sendText() {
       const input = document.getElementById("text-to-type");
       const text = input.value.trim();
       if (!text) return;
-      await fetch("/api/action/type", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text })
-      });
-      input.value = "";
-      setTimeout(fetchScreen, 500);
+      if (await actionRequest("/api/action/type", { text })) input.value = "";
     }
 
     async function launchApp() {
@@ -652,22 +870,21 @@
         alert("请输入有效的应用 Bundle ID");
         return;
       }
-      await fetch("/api/action/app/launch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bundle_id: bundleId })
-      });
-      setTimeout(fetchScreen, 1200);
+      const button = document.getElementById("btn-launch-app");
+      button.disabled = true;
+      try {
+        await actionRequest("/api/action/app/launch", { bundle_id: bundleId });
+      } finally {
+        button.disabled = false;
+      }
     }
 
     async function triggerHome() {
-      await fetch("/api/action/home", { method: "POST" });
-      setTimeout(fetchScreen, 600);
+      await actionRequest("/api/action/home");
     }
 
     async function triggerLock() {
-      await fetch("/api/action/lock", { method: "POST" });
-      setTimeout(fetchScreen, 600);
+      await actionRequest("/api/action/lock");
     }
 
     // Live Logs
@@ -699,8 +916,18 @@
     }
 
     // Polling Loops
-    setInterval(updateStatus, 1500);
+    document.addEventListener("visibilitychange", () => {
+      mouseStart = null;
+      gestureGeneration++;
+      if (document.hidden) setAirPlayActive(false);
+      else { updateUSBStatus(); updateAirPlayStatus(); fetchScreen(); }
+    });
+    setInterval(updateStatus, 2500);
     setInterval(updateLogs, 2000);
+    setInterval(updateAirPlayStatus, 1500);
+    setInterval(updateUSBStatus, 1500);
+    updateUSBStatus();
+    updateAirPlayStatus();
     startSyncInterval();
     updateStatus();
     updateLogs();
